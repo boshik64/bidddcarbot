@@ -14,10 +14,12 @@ BTN_FILTERS = "📋 Мои фильтры"
 BTN_ADD = "➕ Добавить"
 BTN_STATUS = "📊 Статус"
 BTN_INTERVAL = "⏱ Интервал"
+BTN_SUB = "💎 Подписка"
 
-MENU_BUTTON_TEXTS = {BTN_FILTERS, BTN_ADD, BTN_STATUS, BTN_INTERVAL}
+MENU_BUTTON_TEXTS = {BTN_FILTERS, BTN_ADD, BTN_STATUS, BTN_INTERVAL, BTN_SUB}
 
 INTERVAL_PRESETS = (5, 10, 15, 30, 60, 120)
+LOTS_PAGE_SIZE = 10
 
 
 def main_reply_keyboard() -> ReplyKeyboardMarkup:
@@ -25,6 +27,7 @@ def main_reply_keyboard() -> ReplyKeyboardMarkup:
         keyboard=[
             [KeyboardButton(text=BTN_FILTERS), KeyboardButton(text=BTN_ADD)],
             [KeyboardButton(text=BTN_STATUS), KeyboardButton(text=BTN_INTERVAL)],
+            [KeyboardButton(text=BTN_SUB)],
         ],
         resize_keyboard=True,
         is_persistent=True,
@@ -67,6 +70,7 @@ def filter_card_keyboard(filt: Filter) -> InlineKeyboardMarkup:
     )
     return InlineKeyboardMarkup(
         inline_keyboard=[
+            [InlineKeyboardButton(text="🚗 Текущие лоты", callback_data=f"flt:{filt.id}:lots")],
             [toggle],
             [InlineKeyboardButton(text="🗑 Удалить", callback_data=f"flt:{filt.id}:del")],
             [InlineKeyboardButton(text="🔗 Открыть на bid.cars", url=filt.url)],
@@ -119,5 +123,48 @@ def back_to_filters_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="⬅️ К фильтрам", callback_data="nav:filters")]
+        ]
+    )
+
+
+def paywall_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="1 месяц · 5 USDT", callback_data="pay:month"),
+                InlineKeyboardButton(text="1 год · 50 USDT", callback_data="pay:year"),
+            ]
+        ]
+    )
+
+
+def lots_page_keyboard(filter_id: int, page: int, total: int) -> InlineKeyboardMarkup:
+    pages = max(1, (total + LOTS_PAGE_SIZE - 1) // LOTS_PAGE_SIZE) if total else 1
+    nav: list[InlineKeyboardButton] = []
+    if total and page > 0:
+        nav.append(
+            InlineKeyboardButton(text="⬅️", callback_data=f"flt:{filter_id}:lots:{page - 1}")
+        )
+    if total and page + 1 < pages:
+        nav.append(
+            InlineKeyboardButton(text="➡️", callback_data=f"flt:{filter_id}:lots:{page + 1}")
+        )
+    rows: list[list[InlineKeyboardButton]] = []
+    if nav:
+        rows.append(nav)
+    rows.append(
+        [InlineKeyboardButton(text="🔄 Обновить", callback_data=f"flt:{filter_id}:lots")]
+    )
+    rows.append(
+        [InlineKeyboardButton(text="⬅️ К карточке", callback_data=f"flt:{filter_id}")]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def invoice_keyboard(plan: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Я оплатил", callback_data=f"payok:{plan}")],
+            [InlineKeyboardButton(text="⬅️ Тарифы", callback_data="nav:pay")],
         ]
     )

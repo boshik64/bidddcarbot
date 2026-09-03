@@ -39,8 +39,13 @@ class User(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     telegram_chat_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    is_lifetime: Mapped[bool] = mapped_column(Boolean, default=False)
+    subscribed_until: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     filters: Mapped[List["Filter"]] = relationship(back_populates="user")
+    payments: Mapped[List["Payment"]] = relationship(back_populates="user")
 
 
 class Filter(Base):
@@ -82,3 +87,18 @@ class SeenLot(Base):
     raw_data: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
     filter: Mapped["Filter"] = relationship(back_populates="seen_lots")
+
+
+class Payment(Base):
+    __tablename__ = "payments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    plan: Mapped[str] = mapped_column(String(16))
+    amount_usdt: Mapped[str] = mapped_column(String(32))
+    tx_hash: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    from_address: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="confirmed")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    user: Mapped["User"] = relationship(back_populates="payments")

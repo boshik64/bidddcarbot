@@ -9,6 +9,7 @@ from aiogram.exceptions import TelegramAPIError
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
+from app.access import has_access
 from app.client import ParseError, parse_filter
 from app.config import settings
 from app.db import SessionLocal
@@ -151,8 +152,18 @@ async def poll_filters(bot: Bot) -> None:
             )
             filters = list(result.scalars().all())
 
-        due = [filt for filt in filters if _is_due(filt)]
-        logger.info("Poll cycle: %s active, %s due", len(filters), len(due))
+        due = [
+            filt
+            for filt in filters
+            if has_access(filt.user) and _is_due(filt)
+        ]
+        skipped = sum(1 for filt in filters if not has_access(filt.user))
+        logger.info(
+            "Poll cycle: %s active, %s due, %s skipped (no subscription)",
+            len(filters),
+            len(due),
+            skipped,
+        )
         for filt in due:
             try:
                 await _process_filter(bot, filt)

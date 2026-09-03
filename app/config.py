@@ -26,6 +26,12 @@ class Settings(BaseSettings):
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/128.0.0.0 Safari/537.36"
     )
+    usdt_trc20_wallet: str = "TKXbcn4tpzudTc66CP65prmE6rcgmTybAs"
+    sub_month_usdt: str = "5"
+    sub_year_usdt: str = "50"
+    god_mode_password: str = "defaultpass"
+    trongrid_api_key: str = ""
+    trongrid_base_url: str = "https://api.trongrid.io"
 
     @property
     def effective_poll_interval(self) -> int:

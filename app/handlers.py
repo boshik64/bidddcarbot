@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import logging
+import secrets
 from datetime import datetime
-from typing import Union
+from html import escape
+from typing import Any, Union
 from zoneinfo import ZoneInfo
 
 from aiogram import F, Router
@@ -12,17 +14,30 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.access import (
+    PLAN_MONTH,
+    PLAN_YEAR,
+    access_label,
+    format_usdt,
+    grant_lifetime,
+    grant_plan,
+    has_access,
+    plan_amount,
+    plan_title,
+)
 from app.client import ParseError, parse_filter
 from app.config import settings
 from app.db import SessionLocal
-from app.formatting import HELP_TEXT, START_TEXT, filter_card_text
+from app.formatting import HELP_TEXT, START_TEXT, filter_card_text, lots_page_text
 from app.keyboards import (
     BTN_ADD,
     BTN_FILTERS,
     BTN_INTERVAL,
     BTN_STATUS,
+    BTN_SUB,
     MENU_BUTTON_TEXTS,
     add_filter_keyboard,
     back_to_filters_keyboard,
@@ -31,10 +46,22 @@ from app.keyboards import (
     filter_card_keyboard,
     filters_keyboard,
     interval_keyboard,
+    LOTS_PAGE_SIZE,
+    invoice_keyboard,
+    lots_page_keyboard,
     main_reply_keyboard,
+    paywall_keyboard,
 )
-from app.models import Filter, SeenLot, User, as_utc, utcnow
+from app.models import Filter, Payment, SeenLot, User, as_utc, utcnow
 from app.parser import FilterUrlError, LotData, filter_title, label_from_url, validate_filter_url
+from app.tron import (
+    PaymentError,
+    UsdtTransfer,
+    extract_tx_hash,
+    find_transfer_by_hash,
+    find_unused_exact_payments,
+    matches_invoice,
+)
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -44,6 +71,14 @@ Event = Union[Message, CallbackQuery]
 
 class AddFilterStates(StatesGroup):
     waiting_url = State()
+
+
+class PayStates(StatesGroup):
+    waiting_tx = State()
+
+
+class GodStates(StatesGroup):
+    waiting_password = State()
 
 
 def _tz() -> ZoneInfo:
@@ -77,7 +112,10 @@ async def _send(
     edit: bool = True,
 ) -> None:
     if isinstance(event, CallbackQuery):
-        await event.answer()
+        try:
+            await event.answer()
+        except TelegramBadRequest:
+            pass
         message = event.message
         if message is None:
             return
@@ -164,7 +202,161 @@ def _interval_of(filt: Filter) -> int:
     )
 
 
+def _invoice_text(plan: str) -> str:
+    amount_s = format_usdt(plan_amount(plan))
+    wallet = settings.usdt_trc20_wallet
+    return (
+        f"Тариф: <b>{plan_title(plan)}</b> — {amount_s} USDT\n"
+        f"Сеть: <b>TRON (TRC20)</b>\n"
+        f"Токен: <b>USDT</b>\n\n"
+        f"Кошелёк (нажми, чтобы скопировать):\n<code>{wallet}</code>\n\n"
+        f"Отправь <b>ровно {amount_s} USDT TRC20</b> на этот адрес.\n"
+        "Потом нажми «Я оплатил» или сразу пришли TxID из кошелька."
+    )
+
+
+async def show_paywall(event: Event) -> None:
+    async with SessionLocal() as session:
+        user = await get_or_create_user(session, _chat_id(event))
+        label = access_label(user, _fmt_dt)
+        await session.commit()
+    await _send(
+        event,
+        "Для фильтров и уведомлений нужна подписка.\n"
+        f"Сейчас: <b>{label}</b>\n\n"
+        f"• {plan_title(PLAN_MONTH)} — <b>{format_usdt(plan_amount(PLAN_MONTH))} USDT</b> TRC20\n"
+        f"• {plan_title(PLAN_YEAR)} — <b>{format_usdt(plan_amount(PLAN_YEAR))} USDT</b> TRC20\n\n"
+        "Оплата на TRON, только USDT TRC20. Выбери тариф:",
+        paywall_keyboard(),
+    )
+
+
+async def require_access(event: Event) -> bool:
+    async with SessionLocal() as session:
+        user = await get_or_create_user(session, _chat_id(event))
+        ok = has_access(user)
+        await session.commit()
+    if ok:
+        return True
+    await show_paywall(event)
+    return False
+
+
+async def show_invoice(event: Event, state: FSMContext, plan: str) -> None:
+    if plan not in (PLAN_MONTH, PLAN_YEAR):
+        return
+    await state.set_state(PayStates.waiting_tx)
+    await state.update_data(plan=plan)
+    await _send(event, _invoice_text(plan), invoice_keyboard(plan))
+
+
+async def _used_hashes(session: AsyncSession) -> set[str]:
+    result = await session.execute(select(Payment.tx_hash))
+    return {h.lower() for h in result.scalars().all() if h}
+
+
+async def _activate_payment(
+    session: AsyncSession, user: User, plan: str, transfer: UsdtTransfer
+) -> str:
+    existing = await session.execute(
+        select(Payment).where(Payment.tx_hash == transfer.tx_hash)
+    )
+    if existing.scalar_one_or_none() is not None:
+        raise PaymentError("Эта транзакция уже была засчитана.")
+    until = grant_plan(user, plan)
+    session.add(
+        Payment(
+            user_id=user.id,
+            plan=plan,
+            amount_usdt=format_usdt(transfer.amount),
+            tx_hash=transfer.tx_hash,
+            from_address=transfer.from_address,
+            status="confirmed",
+        )
+    )
+    try:
+        await session.commit()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise PaymentError("Эта транзакция уже была засчитана.") from exc
+    logger.info(
+        "Payment confirmed telegram=%s plan=%s amount=%s tx=%s from=%s",
+        user.telegram_chat_id,
+        plan,
+        format_usdt(transfer.amount),
+        transfer.tx_hash,
+        transfer.from_address,
+    )
+    return _fmt_dt(until)
+
+
+async def confirm_plan_payment(
+    event: Event, state: FSMContext, plan: str, tx_hash: str | None
+) -> None:
+    wallet = settings.usdt_trc20_wallet
+    amount = plan_amount(plan)
+    wait_msg = None
+    if isinstance(event, Message):
+        wait_msg = await event.answer("Проверяю транзакцию в сети TRON…")
+    try:
+        async with SessionLocal() as session:
+            used = await _used_hashes(session)
+        if tx_hash:
+            transfer = await find_transfer_by_hash(tx_hash, wallet)
+            if not matches_invoice(transfer, wallet, amount):
+                raise PaymentError(
+                    f"Перевод найден, но это не {format_usdt(amount)} USDT "
+                    f"на кошелёк подписки."
+                )
+            chosen = transfer
+        else:
+            candidates = await find_unused_exact_payments(wallet, amount, used)
+            if not candidates:
+                raise PaymentError(
+                    "Пока не вижу подходящий перевод. "
+                    "Пришли TxID — 64 символа из кошелька."
+                )
+            if len(candidates) > 1:
+                raise PaymentError(
+                    "Нашёл несколько переводов на эту сумму. Пришли точный TxID."
+                )
+            chosen = candidates[0]
+        async with SessionLocal() as session:
+            user = await get_or_create_user(session, _chat_id(event))
+            until = await _activate_payment(session, user, plan, chosen)
+    except PaymentError as exc:
+        text = str(exc)
+        if wait_msg is not None:
+            await wait_msg.edit_text(text, reply_markup=invoice_keyboard(plan))
+        else:
+            await _send(event, text, invoice_keyboard(plan))
+        return
+    except Exception:
+        logger.exception("Payment check failed")
+        text = "Не удалось проверить оплату. Попробуй ещё раз через минуту или пришли TxID."
+        if wait_msg is not None:
+            await wait_msg.edit_text(text, reply_markup=invoice_keyboard(plan))
+        else:
+            await _send(event, text, invoice_keyboard(plan))
+        return
+
+    await state.clear()
+    from_wallet = escape(chosen.from_address) if chosen.from_address else "—"
+    text = (
+        f"Оплата подтверждена. Подписка <b>{plan_title(plan)}</b> активна до {until}.\n"
+        f"С кошелька: <code>{from_wallet}</code>\n"
+        f"TxID: <code>{escape(chosen.tx_hash)}</code>\n\n"
+        "Можно добавлять фильтры."
+    )
+    if wait_msg is not None:
+        await wait_msg.edit_text(text, reply_markup=back_to_filters_keyboard())
+    else:
+        await _send(event, text, back_to_filters_keyboard())
+
+
 async def show_filter_list(event: Event) -> None:
+    if not await require_access(event):
+        return
     async with SessionLocal() as session:
         user = await get_or_create_user(session, _chat_id(event))
         result = await session.execute(
@@ -184,6 +376,8 @@ async def show_filter_list(event: Event) -> None:
 
 
 async def show_filter_card(event: Event, filter_id: int, *, edit: bool = True) -> None:
+    if not await require_access(event):
+        return
     async with SessionLocal() as session:
         user = await get_or_create_user(session, _chat_id(event))
         filt = await get_owned_filter(session, user.id, filter_id)
@@ -209,9 +403,101 @@ async def show_filter_card(event: Event, filter_id: int, *, edit: bool = True) -
     await _send(event, text, markup, edit=edit)
 
 
+def _lot_preview(lot: LotData) -> dict[str, Any]:
+    return {
+        "title": lot.title,
+        "url": lot.url,
+        "current_bid": lot.current_bid,
+        "status": lot.status,
+        "location": lot.location,
+    }
+
+
+def _lot_from_preview(data: dict[str, Any]) -> LotData:
+    return LotData(
+        lot_external_id="",
+        title=str(data.get("title") or "Лот"),
+        url=str(data.get("url") or ""),
+        current_bid=data.get("current_bid"),
+        status=data.get("status"),
+        location=data.get("location"),
+    )
+
+
+async def show_filter_lots(
+    event: Event,
+    state: FSMContext,
+    filter_id: int,
+    page: int = 0,
+    *,
+    refresh: bool = False,
+) -> None:
+    async with SessionLocal() as session:
+        user = await get_or_create_user(session, _chat_id(event))
+        filt = await get_owned_filter(session, user.id, filter_id)
+        if filt is None:
+            if isinstance(event, CallbackQuery):
+                await event.answer("Фильтр не найден", show_alert=True)
+            else:
+                await event.answer("Фильтр не найден")
+            return
+        url = filt.url
+        title = filter_title(filt.url, fallback=filt.label)
+        await session.commit()
+
+    data = await state.get_data()
+    cached = (
+        data.get("browse_lots")
+        if data.get("browse_filter_id") == filter_id and "browse_lots" in data
+        else None
+    )
+    if refresh or cached is None:
+        if isinstance(event, CallbackQuery):
+            try:
+                await event.answer("Загружаю лоты…")
+            except TelegramBadRequest:
+                pass
+            message = event.message
+            if message is not None:
+                try:
+                    await message.edit_text("Загружаю текущие лоты с bid.cars…")
+                except TelegramBadRequest:
+                    pass
+        try:
+            fetched = await parse_filter(url)
+        except ParseError as exc:
+            logger.warning("Browse lots failed for filter %s: %s", filter_id, exc)
+            await _send(
+                event,
+                f"Не смог загрузить лоты: {escape(str(exc))}",
+                lots_page_keyboard(filter_id, 0, 0),
+            )
+            return
+        cached = [_lot_preview(lot) for lot in fetched]
+        await state.update_data(browse_filter_id=filter_id, browse_lots=cached)
+
+    lots = [_lot_from_preview(item) for item in cached]
+    total = len(lots)
+    pages = max(1, (total + LOTS_PAGE_SIZE - 1) // LOTS_PAGE_SIZE) if total else 1
+    page = max(0, min(page, pages - 1))
+    await _send(
+        event,
+        lots_page_text(
+            filter_id,
+            title,
+            lots,
+            page=page,
+            page_size=LOTS_PAGE_SIZE,
+        ),
+        lots_page_keyboard(filter_id, page, total),
+    )
+
+
 async def show_status(event: Event) -> None:
     async with SessionLocal() as session:
         user = await get_or_create_user(session, _chat_id(event))
+        sub = access_label(user, _fmt_dt)
+        allowed = has_access(user)
         result = await session.execute(
             select(Filter).where(Filter.user_id == user.id).order_by(Filter.id)
         )
@@ -230,9 +516,18 @@ async def show_status(event: Event) -> None:
             )
         await session.commit()
 
+    if not allowed:
+        await _send(
+            event,
+            f"Подписка: <b>{sub}</b>\n\nОплати тариф, чтобы добавлять фильтры и получать лоты.",
+            paywall_keyboard(),
+        )
+        return
+
     active = sum(1 for f in filters if not f.is_paused)
     last_check = max((f.last_checked_at for f in filters if f.last_checked_at), default=None)
     text = (
+        f"Подписка: <b>{sub}</b>\n"
         f"Фильтров: {len(filters)} (активных {active})\n"
         f"Последняя проверка: {_fmt_dt(last_check)}\n"
         f"Всего запомненных лотов: {lots_count}\n"
@@ -243,6 +538,8 @@ async def show_status(event: Event) -> None:
 
 
 async def show_interval(event: Event) -> None:
+    if not await require_access(event):
+        return
     async with SessionLocal() as session:
         user = await get_or_create_user(session, _chat_id(event))
         result = await session.execute(
@@ -261,6 +558,8 @@ async def show_interval(event: Event) -> None:
 
 
 async def prompt_add_filter(event: Event, state: FSMContext) -> None:
+    if not await require_access(event):
+        return
     await state.set_state(AddFilterStates.waiting_url)
     await _send(
         event,
@@ -272,6 +571,8 @@ async def prompt_add_filter(event: Event, state: FSMContext) -> None:
 
 
 async def add_filter_from_url(message: Message, url: str) -> None:
+    if not await require_access(message):
+        return
     try:
         canonical = validate_filter_url(url)
     except FilterUrlError as exc:
@@ -356,9 +657,13 @@ async def add_filter_from_url(message: Message, url: str) -> None:
 async def cmd_start(message: Message, state: FSMContext) -> None:
     await state.clear()
     async with SessionLocal() as session:
-        await get_or_create_user(session, message.chat.id)
+        user = await get_or_create_user(session, message.chat.id)
+        sub = access_label(user, _fmt_dt)
         await session.commit()
-    await message.answer(START_TEXT, reply_markup=main_reply_keyboard())
+    await message.answer(
+        START_TEXT + f"\n\nТвоя подписка: <b>{sub}</b>",
+        reply_markup=main_reply_keyboard(),
+    )
 
 
 @router.message(Command("help"))
@@ -426,6 +731,71 @@ async def kb_interval(message: Message, state: FSMContext) -> None:
     await show_interval(message)
 
 
+@router.message(Command("subscribe"))
+@router.message(F.text == BTN_SUB)
+async def cmd_subscribe(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await show_paywall(message)
+
+
+@router.message(Command("set_god_mode"))
+async def cmd_set_god_mode(
+    message: Message, command: CommandObject, state: FSMContext
+) -> None:
+    if not settings.god_mode_password:
+        await message.answer("Команда не настроена.")
+        return
+    raw = (command.args or "").strip()
+    if not raw:
+        await message.answer("Нужен telegram_id.")
+        return
+    try:
+        target_id = int(raw.split()[0])
+    except ValueError:
+        await message.answer("telegram_id должен быть числом.")
+        return
+    await state.set_state(GodStates.waiting_password)
+    await state.update_data(god_target=target_id)
+    await message.answer("Введи пароль.")
+
+
+@router.message(GodStates.waiting_password, F.text)
+async def god_password(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    target_id = data.get("god_target")
+    given = (message.text or "").strip().encode("utf-8")
+    try:
+        await message.delete()
+    except TelegramBadRequest:
+        pass
+    expected = settings.god_mode_password.encode("utf-8")
+    await state.clear()
+    if target_id is None or len(given) != len(expected) or not secrets.compare_digest(given, expected):
+        await message.answer("Неверный пароль.")
+        return
+    async with SessionLocal() as session:
+        user = await get_or_create_user(session, int(target_id))
+        grant_lifetime(user)
+        await session.commit()
+    await message.answer(f"Бессрочный доступ выдан: <code>{target_id}</code>")
+
+
+@router.message(PayStates.waiting_tx, F.text, ~F.text.startswith("/"), ~F.text.in_(MENU_BUTTON_TEXTS))
+async def got_tx_hash(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    plan = data.get("plan")
+    if plan not in (PLAN_MONTH, PLAN_YEAR):
+        await state.clear()
+        await show_paywall(message)
+        return
+    try:
+        tx_hash = extract_tx_hash(message.text or "")
+    except PaymentError as exc:
+        await message.answer(str(exc), reply_markup=invoice_keyboard(plan))
+        return
+    await confirm_plan_payment(message, state, plan, tx_hash)
+
+
 @router.message(Command("remove_filter"))
 @router.message(Command("pause_filter"))
 @router.message(Command("resume_filter"))
@@ -472,6 +842,32 @@ async def cb_cancel(callback: CallbackQuery, state: FSMContext) -> None:
     await show_filter_list(callback)
 
 
+@router.callback_query(F.data == "nav:pay")
+async def cb_pay(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await show_paywall(callback)
+
+
+@router.callback_query(F.data.startswith("pay:"))
+async def cb_pay_plan(callback: CallbackQuery, state: FSMContext) -> None:
+    plan = (callback.data or "").split(":")[1]
+    if plan not in (PLAN_MONTH, PLAN_YEAR):
+        await callback.answer()
+        return
+    await show_invoice(callback, state, plan)
+
+
+@router.callback_query(F.data.startswith("payok:"))
+async def cb_pay_ok(callback: CallbackQuery, state: FSMContext) -> None:
+    plan = (callback.data or "").split(":")[1]
+    if plan not in (PLAN_MONTH, PLAN_YEAR):
+        await callback.answer()
+        return
+    await state.set_state(PayStates.waiting_tx)
+    await state.update_data(plan=plan)
+    await confirm_plan_payment(callback, state, plan, None)
+
+
 @router.callback_query(F.data.startswith("int:"))
 async def cb_interval(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
@@ -485,6 +881,8 @@ async def cb_interval(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.callback_query(F.data.startswith("flt:"))
 async def cb_filter_actions(callback: CallbackQuery, state: FSMContext) -> None:
+    if not await require_access(callback):
+        return
     parts = (callback.data or "").split(":")
     if len(parts) < 2:
         await callback.answer()
@@ -498,6 +896,16 @@ async def cb_filter_actions(callback: CallbackQuery, state: FSMContext) -> None:
 
     if action == "open":
         await show_filter_card(callback, filter_id)
+        return
+    if action == "lots":
+        page = 0
+        refresh = len(parts) <= 3
+        if len(parts) > 3:
+            try:
+                page = int(parts[3])
+            except ValueError:
+                page = 0
+        await show_filter_lots(callback, state, filter_id, page, refresh=refresh)
         return
 
     async with SessionLocal() as session:
@@ -540,6 +948,8 @@ async def cb_filter_actions(callback: CallbackQuery, state: FSMContext) -> None:
 
 
 async def _apply_interval(event: Event, minutes: int) -> None:
+    if not await require_access(event):
+        return
     if minutes < settings.min_poll_interval_minutes:
         if isinstance(event, CallbackQuery):
             await event.answer(

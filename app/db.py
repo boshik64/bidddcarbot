@@ -45,3 +45,30 @@ async def init_db() -> None:
         await conn.commit()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await _migrate_users(conn)
+        await _migrate_payments(conn)
+
+
+async def _migrate_users(conn) -> None:
+    result = await conn.exec_driver_sql("PRAGMA table_info(users)")
+    columns = {row[1] for row in result.fetchall()}
+    if "is_lifetime" not in columns:
+        await conn.exec_driver_sql(
+            "ALTER TABLE users ADD COLUMN is_lifetime BOOLEAN NOT NULL DEFAULT 0"
+        )
+    if "subscribed_until" not in columns:
+        await conn.exec_driver_sql(
+            "ALTER TABLE users ADD COLUMN subscribed_until DATETIME"
+        )
+
+
+async def _migrate_payments(conn) -> None:
+    result = await conn.exec_driver_sql("PRAGMA table_info(payments)")
+    rows = result.fetchall()
+    if not rows:
+        return
+    columns = {row[1] for row in rows}
+    if "from_address" not in columns:
+        await conn.exec_driver_sql(
+            "ALTER TABLE payments ADD COLUMN from_address VARCHAR(64)"
+        )
