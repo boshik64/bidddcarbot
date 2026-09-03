@@ -1,0 +1,26 @@
+# Отдельный compose-проект: не трогает другие боты на той же машине.
+# Нет проброшенных портов — Telegram ходит наружу сам.
+name: bidcarbot
+
+services:
+  bidcarbot:
+    build: .
+    image: bidcarbot:latest
+    container_name: bidcarbot
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: sqlite+aiosqlite:////app/data/bidcarbot.db
+      LOG_DIR: /app/data/logs
+    volumes:
+      - bidcarbot_data:/app/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  bidcarbot_data:
+    name: bidcarbot_data

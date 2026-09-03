@@ -1,0 +1,16 @@
+.git
+.gitignore
+.env
+.venv
+venv
+data
+logs
+tests
+__pycache__
+*.md
+!README.md
+.pytest_cache
+.mypy_cache
+.DS_Store
+TZ_bidcars_telegram_bot.md
+explore.py

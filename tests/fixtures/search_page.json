@@ -1,0 +1,48 @@
+{
+  "current_page": 1,
+  "data": [
+    {
+      "loss_type": "Collision",
+      "primary_damage": "Right side",
+      "start_code": "Run / Drive",
+      "name": "2021 Toyota Camry, SE",
+      "name_long": "2021 Toyota Camry, SE",
+      "tag": "2021-Toyota-Camry-4T1G11AK1MU486913",
+      "lot": "0-45732519",
+      "vin": "4T1G11AK1MU486913",
+      "location": "Hartford (CT)",
+      "prebid_price": "$400",
+      "buy_now_price": null,
+      "search_status": "active",
+      "img": {
+        "img_1": "https://images.bid.cars/045732519_6a97e8884ce4c/2021-Toyota-Camry-4T1G11AK1MU486913-1.jpg"
+      }
+    },
+    {
+      "loss_type": "Other",
+      "primary_damage": "Front / rear",
+      "start_code": "Stationary",
+      "name": "2019 Toyota Camry, SE",
+      "name_long": "2019 Toyota Camry, SE",
+      "tag": "2019-Toyota-Camry-4T1B11HK7KU716077",
+      "lot": "0-45495498",
+      "vin": "4T1B11HK7KU716077",
+      "location": "Atlanta East (GA)",
+      "prebid_price": "$25",
+      "search_status": "active",
+      "img": {
+        "img_1": "https://images.bid.cars/045495498_6a9696f1546b5/2019-Toyota-Camry-4T1B11HK7KU716077-1.jpg"
+      }
+    }
+  ],
+  "first_page_url": "https://bid.cars/app/search/request?page=1",
+  "from": 1,
+  "last_page": 24,
+  "last_page_url": "https://bid.cars/app/search/request?page=24",
+  "next_page_url": "https://bid.cars/app/search/request?page=2",
+  "path": "https://bid.cars/app/search/request",
+  "per_page": 50,
+  "prev_page_url": null,
+  "to": 50,
+  "total": 1177
+}
