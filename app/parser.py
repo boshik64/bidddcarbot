@@ -79,22 +79,51 @@ def validate_filter_url(url: str) -> str:
     return urlunparse(cleaned)
 
 
-def label_from_url(url: str) -> str:
+def _param_pretty(value: str | None) -> str | None:
+    if not value:
+        return None
+    text = value.replace("+", " ").strip()
+    if not text or text.lower() == "all":
+        return None
+    return text
+
+
+def filter_identity(url: str) -> tuple[str | None, str | None, str | None]:
+    """Марка, модель, годы из URL фильтра."""
     params = dict(parse_qsl(urlparse(url).query, keep_blank_values=True))
-    make = params.get("make") or params.get("brand")
-    model = params.get("model")
+    make = _param_pretty(params.get("make") or params.get("brand"))
+    model = _param_pretty(params.get("model"))
     year_from = params.get("year-from") or params.get("year_from")
     year_to = params.get("year-to") or params.get("year_to")
-    bits: list[str] = []
-    if make and make.lower() != "all":
-        bits.append(make)
-    if model and model.lower() != "all":
-        bits.append(model)
-    if year_from or year_to:
-        bits.append(f"{year_from or '?'}–{year_to or '?'}")
+    years = None
+    if year_from and year_to and year_from == year_to:
+        years = year_from
+    elif year_from or year_to:
+        years = f"{year_from or '?'}–{year_to or '?'}"
+    return make, model, years
+
+
+def filter_title(url: str, fallback: str | None = None) -> str:
+    make, model, years = filter_identity(url)
+    bits = [p for p in (make, model, years) if p]
     if "archived" in urlparse(url).path.lower():
         bits.append("архив")
-    return " ".join(bits) if bits else "Фильтр bid.cars"
+    if bits:
+        return " · ".join(bits)
+    return fallback or "Фильтр bid.cars"
+
+
+def button_label(filter_id: int, url: str, fallback: str | None = None) -> str:
+    """Текст кнопки: #id, марка, модель, год. Лимит Telegram — 64 символа."""
+    title = filter_title(url, fallback=fallback)
+    text = f"#{filter_id} · {title}"
+    if len(text) > 64:
+        text = text[:63] + "…"
+    return text
+
+
+def label_from_url(url: str) -> str:
+    return filter_title(url)
 
 
 def filter_url_to_api_url(filter_url: str, page: int = 1) -> str:

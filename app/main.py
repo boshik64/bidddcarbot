@@ -22,15 +22,12 @@ logger = logging.getLogger(__name__)
 async def _set_commands(bot: Bot) -> None:
     await bot.set_my_commands(
         [
-            BotCommand(command="start", description="Приветствие и инструкция"),
-            BotCommand(command="add_filter", description="Добавить фильтр bid.cars"),
-            BotCommand(command="list_filters", description="Список фильтров"),
-            BotCommand(command="remove_filter", description="Удалить фильтр по id"),
-            BotCommand(command="pause_filter", description="Пауза фильтра"),
-            BotCommand(command="resume_filter", description="Возобновить фильтр"),
+            BotCommand(command="start", description="Меню и кнопки"),
+            BotCommand(command="list_filters", description="Мои фильтры"),
+            BotCommand(command="add_filter", description="Добавить фильтр"),
             BotCommand(command="status", description="Статистика"),
-            BotCommand(command="set_interval", description="Интервал проверки, минуты"),
-            BotCommand(command="help", description="Список команд"),
+            BotCommand(command="set_interval", description="Интервал проверки"),
+            BotCommand(command="help", description="Справка"),
         ]
     )
 

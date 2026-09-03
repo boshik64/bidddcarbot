@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from html import escape
 
-from app.parser import LotData
+from app.parser import LotData, filter_title
 
 
 def lot_caption(lot: LotData) -> str:
@@ -22,24 +22,47 @@ def lot_caption(lot: LotData) -> str:
 
 
 HELP_TEXT = (
-    "Команды:\n"
-    "/start — приветствие\n"
-    "/add_filter &lt;ссылка&gt; — добавить фильтр bid.cars\n"
-    "/list_filters — список твоих фильтров\n"
-    "/remove_filter &lt;id&gt; — удалить фильтр\n"
-    "/pause_filter &lt;id&gt; — поставить на паузу\n"
-    "/resume_filter &lt;id&gt; — возобновить\n"
-    "/status — статистика\n"
-    "/set_interval &lt;минуты&gt; — частота проверки\n"
-    "/help — эта справка\n\n"
-    "Как получить ссылку: открой bid.cars, настрой фильтр "
-    "(марка/модель/год/повреждение) и скопируй URL из адресной строки."
+    "Я слежу за новыми лотами на bid.cars по твоим фильтрам.\n\n"
+    "Управление — кнопками внизу экрана и карточками фильтров:\n"
+    "📋 <b>Мои фильтры</b> — список, внутри пауза и удаление\n"
+    "➕ <b>Добавить</b> — прислать ссылку на поиск\n"
+    "📊 <b>Статус</b> — сколько фильтров и лотов\n"
+    "⏱ <b>Интервал</b> — как часто проверять\n\n"
+    "Ссылку на фильтр можно просто вставить в чат, без команды.\n"
+    "Как получить: bid.cars → настрой поиск → скопируй URL из адресной строки."
 )
 
 START_TEXT = (
     "Привет! Я слежу за новыми лотами на bid.cars.\n\n"
     "1. Открой нужный поиск на сайте и скопируй ссылку.\n"
-    "2. Пришли её командой /add_filter или просто вставь URL.\n"
+    "2. Нажми <b>Добавить</b> или просто вставь URL.\n"
     "3. Я запомню текущие лоты и буду присылать только новые.\n\n"
     + HELP_TEXT
 )
+
+
+def filter_card_text(
+    filter_id: int,
+    url: str,
+    *,
+    is_paused: bool,
+    last_checked: str,
+    interval_minutes: int,
+    lots_count: int,
+    last_error: str | None = None,
+    label: str | None = None,
+) -> str:
+    title = filter_title(url, fallback=label)
+    status = "⏸ на паузе" if is_paused else "✅ активен"
+    lines = [
+        f"Фильтр <b>#{filter_id}</b>",
+        f"🚗 {escape(title)}",
+        f"📌 {status}",
+        f"🕒 Последняя проверка: {escape(last_checked)}",
+        f"⏱ Интервал: {interval_minutes} мин",
+        f"📦 Лотов в памяти: {lots_count}",
+        f'🔗 <a href="{escape(url, quote=True)}">Страница фильтра</a>',
+    ]
+    if last_error:
+        lines.append(f"⚠️ Последняя ошибка: {escape(last_error)}")
+    return "\n".join(lines)

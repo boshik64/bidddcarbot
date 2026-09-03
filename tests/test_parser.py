@@ -5,6 +5,7 @@ from pathlib import Path
 
 from app.parser import (
     FilterUrlError,
+    button_label,
     filter_url_to_api_url,
     label_from_url,
     lot_from_item,
@@ -72,6 +73,39 @@ def test_label_from_url() -> None:
     assert "Toyota" in label
     assert "Camry" in label
     assert "2018" in label
+
+
+def test_button_label_id_make_model_year() -> None:
+    url = (
+        "https://bid.cars/en/search/results?make=BMW&model=5+Series"
+        "&year-from=2018&year-to=2020"
+    )
+    text = button_label(12, url)
+    assert text.startswith("#12")
+    assert "BMW" in text
+    assert "5 Series" in text
+    assert "2018" in text
+    assert "2020" in text
+    assert len(text) <= 64
+
+
+def test_button_label_skips_all_model() -> None:
+    url = "https://bid.cars/ru/search/results?make=Toyota&model=All&year-from=2015&year-to=2020"
+    text = button_label(3, url)
+    assert text == "#3 · Toyota · 2015–2020"
+
+
+def test_button_label_truncated() -> None:
+    url = (
+        "https://bid.cars/en/search/results?make="
+        + "VeryLongMakeName" * 5
+        + "&model="
+        + "VeryLongModelName" * 5
+        + "&year-from=2010&year-to=2026"
+    )
+    text = button_label(99, url)
+    assert len(text) <= 64
+    assert text.startswith("#99")
 
 
 def test_parse_fixture_lots() -> None:
