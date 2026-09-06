@@ -129,11 +129,12 @@ class BidCarsClient:
             raise ParseError("Неожиданный формат JSON")
         return payload
 
-    async def parse_filter(self, url: str) -> list[LotData]:
+    async def parse_filter_with_total(self, url: str) -> tuple[list[LotData], int]:
         filter_url = validate_filter_url(url)
         collected: list[LotData] = []
         seen_ids: set[str] = set()
         last_page = settings.parser_max_pages
+        total: int | None = None
 
         for page in range(1, settings.parser_max_pages + 1):
             if page > last_page:
@@ -142,6 +143,11 @@ class BidCarsClient:
             logger.info("Fetching bid.cars page %s: %s", page, api_url)
             payload = await self._get_json(api_url, referer=filter_url)
             lots, meta = parse_search_json(payload, source_url=filter_url)
+            if total is None:
+                try:
+                    total = int(meta.get("total"))
+                except (TypeError, ValueError):
+                    total = None
             if not lots:
                 break
             for lot in lots:
@@ -155,7 +161,11 @@ class BidCarsClient:
             if not meta.get("next_page_url") and page >= int(meta.get("last_page") or page):
                 break
 
-        return collected
+        return collected, total if total is not None else len(collected)
+
+    async def parse_filter(self, url: str) -> list[LotData]:
+        lots, _total = await self.parse_filter_with_total(url)
+        return lots
 
 
 client = BidCarsClient()
@@ -166,11 +176,16 @@ async def parse_filter(url: str) -> list[LotData]:
     return await client.parse_filter(url)
 
 
+async def parse_filter_with_total(url: str) -> tuple[list[LotData], int]:
+    return await client.parse_filter_with_total(url)
+
+
 __all__ = [
     "ParseError",
     "FilterUrlError",
     "LotData",
     "parse_filter",
+    "parse_filter_with_total",
     "client",
     "rate_limiter",
 ]

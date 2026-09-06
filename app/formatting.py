@@ -2,13 +2,16 @@ from __future__ import annotations
 
 from html import escape
 
-from app.parser import LotData, filter_title
+from app.parser import LotData, filter_title, format_mileage
 
 
 def lot_caption(lot: LotData) -> str:
     lines = [f"🚗 <b>{escape(lot.title)}</b>"]
     if lot.current_bid:
         lines.append(f"💰 Текущая ставка: {escape(lot.current_bid)}")
+    mileage = format_mileage(lot.odometer_miles, lot.odometer_km)
+    if mileage:
+        lines.append(f"📏 Пробег: {escape(mileage)}")
     if lot.damage:
         lines.append(f"🔧 Повреждение: {escape(lot.damage)}")
     if lot.status:
@@ -53,11 +56,13 @@ def filter_card_text(
     last_checked: str,
     interval_minutes: int,
     lots_count: int,
+    active_lots: int | None = None,
     last_error: str | None = None,
     label: str | None = None,
 ) -> str:
     title = filter_title(url, fallback=label)
     status = "⏸ на паузе" if is_paused else "✅ активен"
+    active = "ещё нет" if active_lots is None else str(active_lots)
     lines = [
         f"Фильтр <b>#{filter_id}</b>",
         f"🚗 {escape(title)}",
@@ -65,6 +70,7 @@ def filter_card_text(
         f"🕒 Последняя проверка: {escape(last_checked)}",
         f"⏱ Интервал: {interval_minutes} мин",
         f"📦 Лотов в памяти: {lots_count}",
+        f"🚗 Активных лотов: {active}",
         f'🔗 <a href="{escape(url, quote=True)}">Страница фильтра</a>',
     ]
     if last_error:
@@ -92,7 +98,8 @@ def lots_page_text(
     page = max(0, min(page, pages - 1))
     header = (
         f"Текущие лоты фильтра <b>#{filter_id}</b> — {escape(title)}\n"
-        f"Страница {page + 1} из {pages} · всего {total}"
+        f"Страница {page + 1} из {pages} · всего {total}\n"
+        "Кнопки 📷 — пролистать фото авто в Telegram."
     )
     if not total:
         return header + "\n\nСейчас по фильтру нет лотов."
@@ -108,6 +115,9 @@ def lots_page_text(
         bits: list[str] = []
         if lot.current_bid:
             bits.append(f"💰 {escape(lot.current_bid)}")
+        mileage = format_mileage(lot.odometer_miles, lot.odometer_km)
+        if mileage:
+            bits.append(f"📏 {escape(mileage)}")
         if lot.location:
             bits.append(f"📍 {escape(_clip(lot.location, 40))}")
         if lot.status:

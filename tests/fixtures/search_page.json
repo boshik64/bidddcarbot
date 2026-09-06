@@ -13,9 +13,14 @@
       "location": "Hartford (CT)",
       "prebid_price": "$400",
       "buy_now_price": null,
+      "odometer": 32431,
       "search_status": "active",
       "img": {
         "img_1": "https://images.bid.cars/045732519_6a97e8884ce4c/2021-Toyota-Camry-4T1G11AK1MU486913-1.jpg"
+      },
+      "img_large": {
+        "img_1": "https://pluto.bid.car/0-45732519/2021-Toyota-Camry-4T1G11AK1MU486913-1.jpg",
+        "img_2": "https://pluto.bid.car/0-45732519/2021-Toyota-Camry-4T1G11AK1MU486913-2.jpg"
       }
     },
     {

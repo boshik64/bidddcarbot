@@ -126,6 +126,10 @@ def test_parse_fixture_lots() -> None:
     assert first.status == "На ходу"
     assert first.location == "Hartford (CT)"
     assert first.photo_url.endswith("-1.jpg")
+    assert first.photo_urls[0].startswith("https://pluto.bid.car/")
+    assert len(first.photo_urls) == 2
+    assert first.odometer_miles == 32431
+    assert first.odometer_km == 52193
     assert first.url.startswith("https://bid.cars/ru/lot/0-45732519/")
 
     second = lots[1]

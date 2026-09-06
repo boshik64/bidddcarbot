@@ -66,6 +66,7 @@ class Filter(Base):
     )
     consecutive_failures: Mapped[int] = mapped_column(Integer, default=0)
     last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    last_active_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     user: Mapped["User"] = relationship(back_populates="filters")
     seen_lots: Mapped[List["SeenLot"]] = relationship(

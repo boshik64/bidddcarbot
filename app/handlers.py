@@ -28,7 +28,8 @@ from app.access import (
     plan_amount,
     plan_title,
 )
-from app.client import ParseError, parse_filter
+from app.client import ParseError, parse_filter_with_total
+from app.lot_send import send_lot_album
 from app.config import settings
 from app.db import SessionLocal
 from app.formatting import HELP_TEXT, START_TEXT, filter_card_text, lots_page_text
@@ -395,6 +396,7 @@ async def show_filter_card(event: Event, filter_id: int, *, edit: bool = True) -
             last_checked=_fmt_dt(filt.last_checked_at),
             interval_minutes=_interval_of(filt),
             lots_count=lots_count,
+            active_lots=filt.last_active_count,
             last_error=filt.last_error,
             label=filt.label,
         )
@@ -405,22 +407,36 @@ async def show_filter_card(event: Event, filter_id: int, *, edit: bool = True) -
 
 def _lot_preview(lot: LotData) -> dict[str, Any]:
     return {
+        "id": lot.lot_external_id,
         "title": lot.title,
         "url": lot.url,
         "current_bid": lot.current_bid,
         "status": lot.status,
         "location": lot.location,
+        "vin": lot.vin,
+        "damage": lot.damage,
+        "odometer_miles": lot.odometer_miles,
+        "odometer_km": lot.odometer_km,
+        "photo_url": lot.photo_url,
+        "photo_urls": list(lot.photo_urls or [])[:10],
     }
 
 
 def _lot_from_preview(data: dict[str, Any]) -> LotData:
+    photos = [str(url) for url in (data.get("photo_urls") or []) if url]
     return LotData(
-        lot_external_id="",
+        lot_external_id=str(data.get("id") or ""),
         title=str(data.get("title") or "Лот"),
         url=str(data.get("url") or ""),
         current_bid=data.get("current_bid"),
         status=data.get("status"),
         location=data.get("location"),
+        vin=data.get("vin"),
+        damage=data.get("damage"),
+        odometer_miles=data.get("odometer_miles"),
+        odometer_km=data.get("odometer_km"),
+        photo_url=data.get("photo_url") or (photos[0] if photos else None),
+        photo_urls=photos,
     )
 
 
@@ -464,7 +480,7 @@ async def show_filter_lots(
                 except TelegramBadRequest:
                     pass
         try:
-            fetched = await parse_filter(url)
+            fetched, active_total = await parse_filter_with_total(url)
         except ParseError as exc:
             logger.warning("Browse lots failed for filter %s: %s", filter_id, exc)
             await _send(
@@ -475,6 +491,12 @@ async def show_filter_lots(
             return
         cached = [_lot_preview(lot) for lot in fetched]
         await state.update_data(browse_filter_id=filter_id, browse_lots=cached)
+        async with SessionLocal() as session:
+            user = await get_or_create_user(session, _chat_id(event))
+            filt = await get_owned_filter(session, user.id, filter_id)
+            if filt is not None:
+                filt.last_active_count = active_total
+                await session.commit()
 
     lots = [_lot_from_preview(item) for item in cached]
     total = len(lots)
@@ -491,6 +513,31 @@ async def show_filter_lots(
         ),
         lots_page_keyboard(filter_id, page, total),
     )
+
+
+async def send_filter_lot_photos(event: Event, state: FSMContext, filter_id: int, index: int) -> None:
+    data = await state.get_data()
+    cached = data.get("browse_lots") if data.get("browse_filter_id") == filter_id else None
+    if not cached:
+        await show_filter_lots(event, state, filter_id, page=index // LOTS_PAGE_SIZE, refresh=True)
+        data = await state.get_data()
+        cached = data.get("browse_lots") if data.get("browse_filter_id") == filter_id else None
+        if not cached:
+            return
+    if index < 0 or index >= len(cached):
+        if isinstance(event, CallbackQuery):
+            await event.answer("Лот не найден", show_alert=True)
+        return
+    lot = _lot_from_preview(cached[index])
+    if isinstance(event, CallbackQuery):
+        try:
+            await event.answer("Отправляю фото…")
+        except TelegramBadRequest:
+            pass
+        chat_id = _chat_id(event)
+        await send_lot_album(event.bot, chat_id, lot)
+        return
+    await send_lot_album(event.bot, event.chat.id, lot)
 
 
 async def show_status(event: Event) -> None:
@@ -603,7 +650,7 @@ async def add_filter_from_url(message: Message, url: str) -> None:
 
         wait_msg = await message.answer("Добавляю фильтр, сейчас сниму текущие лоты…")
         try:
-            lots = await parse_filter(canonical)
+            lots, active_total = await parse_filter_with_total(canonical)
         except ParseError as exc:
             logger.warning("Initial parse failed for %s: %s", canonical, exc)
             await wait_msg.edit_text(
@@ -627,12 +674,13 @@ async def add_filter_from_url(message: Message, url: str) -> None:
         await snapshot_lots(session, filt.id, lots)
         filt.last_checked_at = utcnow()
         filt.consecutive_failures = 0
+        filt.last_active_count = active_total
         await session.commit()
         await session.refresh(filt)
 
         text = (
             f"Фильтр <b>#{filt.id}</b> добавлен: {filter_title(canonical)}\n"
-            f"Сейчас по нему {len(lots)} лотов (на первых страницах). "
+            f"Сейчас по нему {active_total} лотов. "
             "Их я запомнил и спамить не буду — пришлю только новые."
         )
         card = filter_card_text(
@@ -642,6 +690,7 @@ async def add_filter_from_url(message: Message, url: str) -> None:
             last_checked=_fmt_dt(filt.last_checked_at),
             interval_minutes=_interval_of(filt),
             lots_count=len(lots),
+            active_lots=active_total,
             label=filt.label,
         )
         await wait_msg.edit_text(
@@ -906,6 +955,14 @@ async def cb_filter_actions(callback: CallbackQuery, state: FSMContext) -> None:
             except ValueError:
                 page = 0
         await show_filter_lots(callback, state, filter_id, page, refresh=refresh)
+        return
+    if action == "ph":
+        try:
+            index = int(parts[3])
+        except (IndexError, ValueError):
+            await callback.answer("Лот не найден", show_alert=True)
+            return
+        await send_filter_lot_photos(callback, state, filter_id, index)
         return
 
     async with SessionLocal() as session:

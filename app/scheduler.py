@@ -10,10 +10,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.access import has_access
-from app.client import ParseError, parse_filter
+from app.client import parse_filter_with_total
 from app.config import settings
 from app.db import SessionLocal
-from app.formatting import lot_caption
+from app.lot_send import send_lot_album
 from app.models import Filter, SeenLot, as_utc, utcnow
 from app.parser import LotData
 
@@ -36,30 +36,16 @@ def _is_due(filt: Filter) -> bool:
 
 
 async def _send_lot(bot: Bot, chat_id: int, lot: LotData) -> None:
-    caption = lot_caption(lot)
     try:
-        if lot.photo_url and len(caption) <= 1024:
-            await bot.send_photo(
-                chat_id,
-                photo=lot.photo_url,
-                caption=caption,
-            )
-            return
-        if lot.photo_url:
-            await bot.send_photo(chat_id, photo=lot.photo_url)
-        await bot.send_message(chat_id, caption, disable_web_page_preview=True)
+        await send_lot_album(bot, chat_id, lot)
     except TelegramAPIError as exc:
         logger.warning("Failed to send lot %s to %s: %s", lot.lot_external_id, chat_id, exc)
-        try:
-            await bot.send_message(chat_id, caption, disable_web_page_preview=True)
-        except TelegramAPIError:
-            logger.exception("Fallback text send also failed for lot %s", lot.lot_external_id)
 
 
 async def _process_filter(bot: Bot, filt: Filter) -> None:
     chat_id = filt.user.telegram_chat_id
     try:
-        lots = await parse_filter(filt.url)
+        lots, active_total = await parse_filter_with_total(filt.url)
     except Exception as exc:
         logger.exception("Parse failed for filter %s: %s", filt.id, exc)
         async with SessionLocal() as session:
@@ -107,6 +93,7 @@ async def _process_filter(bot: Bot, filt: Filter) -> None:
         db_filt.last_checked_at = now
         db_filt.consecutive_failures = 0
         db_filt.last_error = None
+        db_filt.last_active_count = active_total
         await session.commit()
 
     if not new_lots:

@@ -152,6 +152,19 @@ def lots_page_keyboard(filter_id: int, page: int, total: int) -> InlineKeyboardM
     rows: list[list[InlineKeyboardButton]] = []
     if nav:
         rows.append(nav)
+    if total:
+        start = page * LOTS_PAGE_SIZE
+        count = min(LOTS_PAGE_SIZE, max(0, total - start))
+        photo_row: list[InlineKeyboardButton] = []
+        for offset in range(count):
+            photo_row.append(
+                InlineKeyboardButton(
+                    text=f"📷 {start + offset + 1}",
+                    callback_data=f"flt:{filter_id}:ph:{start + offset}",
+                )
+            )
+        for i in range(0, len(photo_row), 5):
+            rows.append(photo_row[i : i + 5])
     rows.append(
         [InlineKeyboardButton(text="🔄 Обновить", callback_data=f"flt:{filter_id}:lots")]
     )

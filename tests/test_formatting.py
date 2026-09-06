@@ -1,6 +1,7 @@
 from app.formatting import filter_card_text, lot_caption, lots_page_text
 from app.keyboards import LOTS_PAGE_SIZE, lots_page_keyboard
-from app.parser import LotData
+from app.lot_send import album_photo_urls
+from app.parser import LotData, TG_ALBUM_MAX, format_mileage
 
 
 def test_lot_caption_contains_core_fields() -> None:
@@ -13,10 +14,13 @@ def test_lot_caption_contains_core_fields() -> None:
         status="На ходу",
         location="Houston (TX)",
         vin="WBA123",
+        odometer_miles=32431,
+        odometer_km=52193,
     )
     text = lot_caption(lot)
     assert "2018 BMW 530xi" in text
     assert "$625" in text
+    assert "32 431 mi / 52 193 км" in text
     assert "Сторона, Задняя часть" in text
     assert "На ходу" in text
     assert "Houston (TX)" in text
@@ -36,6 +40,7 @@ def test_filter_card_text() -> None:
     assert "BMW" in text
     assert "на паузе" in text
     assert "87" in text
+    assert "Активных лотов" in text
 
 
 def _sample_lots(n: int) -> list[LotData]:
@@ -47,6 +52,7 @@ def _sample_lots(n: int) -> list[LotData]:
             current_bid=f"${i}00",
             location="Houston (TX)",
             status="На ходу",
+            odometer_miles=1000 * i,
         )
         for i in range(1, n + 1)
     ]
@@ -62,6 +68,7 @@ def test_lots_page_text_paginates() -> None:
     assert "Car 10" not in text
     assert "Car 21" not in text
     assert "https://bid.cars/en/lot/11/car-11" in text
+    assert "mi /" in text
 
 
 def test_lots_page_text_empty() -> None:
@@ -82,3 +89,23 @@ def test_lots_page_keyboard_navigation() -> None:
     last_data = [btn.callback_data for row in last.inline_keyboard for btn in row]
     assert "flt:7:lots:1" in last_data
     assert "flt:7:lots:3" not in last_data
+    assert "flt:7:ph:0" in first_data
+    assert "flt:7:ph:20" in last_data
+
+
+def test_format_mileage_converts_miles_to_km() -> None:
+    assert format_mileage(32431, None) == "32 431 mi / 52 193 км"
+    assert format_mileage(None, None) is None
+
+
+def test_album_never_exceeds_telegram_limit() -> None:
+    urls = [f"https://pluto.bid.car/x-{i}.jpg" for i in range(1, 21)]
+    lot = LotData(
+        lot_external_id="1",
+        title="Car",
+        url="https://bid.cars/en/lot/1/car",
+        photo_urls=urls,
+    )
+    album = album_photo_urls(lot)
+    assert len(album) == TG_ALBUM_MAX
+    assert album[0].endswith("-1.jpg")

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
@@ -22,6 +23,10 @@ class FilterUrlError(ValueError):
     pass
 
 
+KM_PER_MILE = 1.609344
+TG_ALBUM_MAX = 10
+
+
 @dataclass
 class LotData:
     lot_external_id: str
@@ -33,6 +38,9 @@ class LotData:
     status: str | None = None
     location: str | None = None
     photo_url: str | None = None
+    photo_urls: list[str] = field(default_factory=list)
+    odometer_miles: int | None = None
+    odometer_km: int | None = None
     search_status: str | None = None
     raw: dict[str, Any] = field(default_factory=dict)
 
@@ -139,23 +147,87 @@ def lot_page_url(lot: str, tag: str | None, lang: str = "en") -> str:
     return f"https://bid.cars/{lang}/lot/{lot}/{slug}"
 
 
-def _first_image(value: Any) -> str | None:
+def _img_key_order(key: Any) -> tuple[int, str]:
+    text = str(key)
+    match = re.search(r"(\d+)$", text)
+    return (int(match.group(1)) if match else 0, text)
+
+
+def _collect_image_urls(value: Any) -> list[str]:
     if not value:
-        return None
+        return []
     if isinstance(value, str):
-        return value
+        return [value] if value.startswith("http") else []
+    found: list[str] = []
     if isinstance(value, dict):
-        for key in sorted(value.keys(), key=lambda k: (len(k), k)):
-            item = value[key]
-            if isinstance(item, str) and item.startswith("http"):
-                return item
-            if isinstance(item, dict):
-                nested = _first_image(item)
-                if nested:
-                    return nested
-    if isinstance(value, list) and value:
-        return _first_image(value[0])
-    return None
+        for key in sorted(value.keys(), key=_img_key_order):
+            found.extend(_collect_image_urls(value[key]))
+        return found
+    if isinstance(value, list):
+        for item in value:
+            found.extend(_collect_image_urls(item))
+    return found
+
+
+def extract_image_urls(*sources: Any) -> list[str]:
+    urls: list[str] = []
+    seen: set[str] = set()
+    for source in sources:
+        for url in _collect_image_urls(source):
+            if url not in seen:
+                seen.add(url)
+                urls.append(url)
+    return urls
+
+
+def _first_image(value: Any) -> str | None:
+    urls = _collect_image_urls(value)
+    return urls[0] if urls else None
+
+
+def _as_int(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    text = str(value).replace(",", "").replace(" ", "").strip()
+    if not text:
+        return None
+    try:
+        return int(float(text))
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_odometer(item: dict[str, Any]) -> tuple[int | None, int | None]:
+    miles = _as_int(item.get("odometer_miles") if item.get("odometer_miles") not in (None, "") else item.get("odometer"))
+    km = _as_int(item.get("odometer_km") or item.get("odometer_kilometers"))
+    unit = str(item.get("odometer_unit") or "").lower()
+    if miles is not None and miles < 0:
+        miles = None
+    if km is not None and km < 0:
+        km = None
+    if miles is not None and km is None:
+        if "km" in unit:
+            km = miles
+            miles = round(km / KM_PER_MILE)
+        else:
+            km = round(miles * KM_PER_MILE)
+    elif km is not None and miles is None:
+        miles = round(km / KM_PER_MILE)
+    return miles, km
+
+
+def format_mileage(miles: int | None, km: int | None) -> str | None:
+    if miles is None and km is None:
+        return None
+    if miles is None and km is not None:
+        miles = round(km / KM_PER_MILE)
+    if km is None and miles is not None:
+        km = round(miles * KM_PER_MILE)
+    return f"{miles:,} mi / {km:,} км".replace(",", " ")
 
 
 def _clean_text(value: Any) -> str | None:
@@ -198,7 +270,8 @@ def lot_from_item(item: dict[str, Any], lang: str = "en") -> LotData | None:
         return None
     title = _clean_text(item.get("name_long")) or _clean_text(item.get("name")) or lot_id
     tag = _clean_text(item.get("tag"))
-    photo = _first_image(item.get("img")) or _first_image(item.get("img_large"))
+    photos = extract_image_urls(item.get("img_large")) or extract_image_urls(item.get("img"))
+    miles, km = parse_odometer(item)
     return LotData(
         lot_external_id=lot_id,
         title=title,
@@ -209,7 +282,10 @@ def lot_from_item(item: dict[str, Any], lang: str = "en") -> LotData | None:
         damage=_damage_line(item),
         status=_map_status(_clean_text(item.get("start_code"))),
         location=_clean_text(item.get("location")),
-        photo_url=photo,
+        photo_url=photos[0] if photos else None,
+        photo_urls=photos,
+        odometer_miles=miles,
+        odometer_km=km,
         search_status=_clean_text(item.get("search_status")),
         raw=item,
     )

@@ -47,6 +47,7 @@ async def init_db() -> None:
         await conn.run_sync(Base.metadata.create_all)
         await _migrate_users(conn)
         await _migrate_payments(conn)
+        await _migrate_filters(conn)
 
 
 async def _migrate_users(conn) -> None:
@@ -60,6 +61,13 @@ async def _migrate_users(conn) -> None:
         await conn.exec_driver_sql(
             "ALTER TABLE users ADD COLUMN subscribed_until DATETIME"
         )
+
+
+async def _migrate_filters(conn) -> None:
+    result = await conn.exec_driver_sql("PRAGMA table_info(filters)")
+    columns = {row[1] for row in result.fetchall()}
+    if "last_active_count" not in columns:
+        await conn.exec_driver_sql("ALTER TABLE filters ADD COLUMN last_active_count INTEGER")
 
 
 async def _migrate_payments(conn) -> None:
