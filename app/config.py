@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     poll_interval_minutes: int = 10
     min_poll_interval_minutes: int = 5
     max_filters_per_user: int = 10
+    max_watched_per_user: int = 30
     request_delay_seconds: float = 3.0
     parser_max_pages: int = 2
     parse_failure_threshold: int = 5

@@ -4,7 +4,7 @@ import logging
 import secrets
 from datetime import datetime
 from html import escape
-from typing import Any, Union
+from typing import Union
 from zoneinfo import ZoneInfo
 
 from aiogram import F, Router
@@ -28,18 +28,26 @@ from app.access import (
     plan_amount,
     plan_title,
 )
-from app.client import ParseError, parse_filter_with_total
-from app.lot_send import send_lot_album
+from app.client import ParseError, fetch_lot, parse_filter_with_total
+from app.lot_send import remember_lot, send_lot_album
 from app.config import settings
 from app.db import SessionLocal
-from app.formatting import HELP_TEXT, START_TEXT, filter_card_text, lots_page_text
+from app.formatting import (
+    HELP_TEXT,
+    START_TEXT,
+    filter_card_text,
+    lots_page_text,
+    watch_list_text,
+)
 from app.keyboards import (
     BTN_ADD,
     BTN_FILTERS,
     BTN_INTERVAL,
     BTN_STATUS,
     BTN_SUB,
+    BTN_WATCH,
     MENU_BUTTON_TEXTS,
+    WATCH_PAGE_SIZE,
     add_filter_keyboard,
     back_to_filters_keyboard,
     confirm_delete_keyboard,
@@ -49,12 +57,33 @@ from app.keyboards import (
     interval_keyboard,
     LOTS_PAGE_SIZE,
     invoice_keyboard,
+    lot_watch_keyboard,
     lots_page_keyboard,
     main_reply_keyboard,
     paywall_keyboard,
+    watched_list_keyboard,
 )
 from app.models import Filter, Payment, SeenLot, User, as_utc, utcnow
-from app.parser import FilterUrlError, LotData, filter_title, label_from_url, validate_filter_url
+from app.parser import (
+    FilterUrlError,
+    LotData,
+    filter_title,
+    label_from_url,
+    lot_from_preview,
+    lot_to_preview,
+    validate_filter_url,
+)
+from app.watch import (
+    WatchLimitError,
+    add_watch,
+    is_watched,
+    list_watched,
+    remove_watch,
+    resolve_lot,
+    send_watched_lot_photos,
+    watched_count,
+    watched_ids_for,
+)
 from app.tron import (
     PaymentError,
     UsdtTransfer,
@@ -405,41 +434,6 @@ async def show_filter_card(event: Event, filter_id: int, *, edit: bool = True) -
     await _send(event, text, markup, edit=edit)
 
 
-def _lot_preview(lot: LotData) -> dict[str, Any]:
-    return {
-        "id": lot.lot_external_id,
-        "title": lot.title,
-        "url": lot.url,
-        "current_bid": lot.current_bid,
-        "status": lot.status,
-        "location": lot.location,
-        "vin": lot.vin,
-        "damage": lot.damage,
-        "odometer_miles": lot.odometer_miles,
-        "odometer_km": lot.odometer_km,
-        "photo_url": lot.photo_url,
-        "photo_urls": list(lot.photo_urls or []),
-    }
-
-
-def _lot_from_preview(data: dict[str, Any]) -> LotData:
-    photos = [str(url) for url in (data.get("photo_urls") or []) if url]
-    return LotData(
-        lot_external_id=str(data.get("id") or ""),
-        title=str(data.get("title") or "Лот"),
-        url=str(data.get("url") or ""),
-        current_bid=data.get("current_bid"),
-        status=data.get("status"),
-        location=data.get("location"),
-        vin=data.get("vin"),
-        damage=data.get("damage"),
-        odometer_miles=data.get("odometer_miles"),
-        odometer_km=data.get("odometer_km"),
-        photo_url=data.get("photo_url") or (photos[0] if photos else None),
-        photo_urls=photos,
-    )
-
-
 async def show_filter_lots(
     event: Event,
     state: FSMContext,
@@ -489,7 +483,9 @@ async def show_filter_lots(
                 lots_page_keyboard(filter_id, 0, 0),
             )
             return
-        cached = [_lot_preview(lot) for lot in fetched]
+        cached = [lot_to_preview(lot) for lot in fetched]
+        for lot in fetched:
+            remember_lot(lot)
         await state.update_data(browse_filter_id=filter_id, browse_lots=cached)
         async with SessionLocal() as session:
             user = await get_or_create_user(session, _chat_id(event))
@@ -498,10 +494,19 @@ async def show_filter_lots(
                 filt.last_active_count = active_total
                 await session.commit()
 
-    lots = [_lot_from_preview(item) for item in cached]
+    lots = [lot_from_preview(item) for item in cached]
+    for lot in lots:
+        remember_lot(lot)
     total = len(lots)
     pages = max(1, (total + LOTS_PAGE_SIZE - 1) // LOTS_PAGE_SIZE) if total else 1
     page = max(0, min(page, pages - 1))
+    await state.update_data(browse_page=page)
+    start = page * LOTS_PAGE_SIZE
+    page_lots = lots[start : start + LOTS_PAGE_SIZE]
+    async with SessionLocal() as session:
+        user = await get_or_create_user(session, _chat_id(event))
+        watched = await watched_ids_for(session, user.id)
+        await session.commit()
     await _send(
         event,
         lots_page_text(
@@ -511,7 +516,13 @@ async def show_filter_lots(
             page=page,
             page_size=LOTS_PAGE_SIZE,
         ),
-        lots_page_keyboard(filter_id, page, total),
+        lots_page_keyboard(
+            filter_id,
+            page,
+            total,
+            page_lot_ids=[lot.lot_external_id for lot in page_lots],
+            watched_ids=watched,
+        ),
     )
 
 
@@ -528,16 +539,22 @@ async def send_filter_lot_photos(event: Event, state: FSMContext, filter_id: int
         if isinstance(event, CallbackQuery):
             await event.answer("Лот не найден", show_alert=True)
         return
-    lot = _lot_from_preview(cached[index])
+    lot = lot_from_preview(cached[index])
+    remember_lot(lot)
+    async with SessionLocal() as session:
+        user = await get_or_create_user(session, _chat_id(event))
+        watched = await is_watched(session, user.id, lot.lot_external_id)
+        await session.commit()
+    markup = lot_watch_keyboard(lot.lot_external_id, watched)
     if isinstance(event, CallbackQuery):
         try:
             await event.answer("Отправляю фото…")
         except TelegramBadRequest:
             pass
         chat_id = _chat_id(event)
-        await send_lot_album(event.bot, chat_id, lot)
+        await send_lot_album(event.bot, chat_id, lot, reply_markup=markup)
         return
-    await send_lot_album(event.bot, event.chat.id, lot)
+    await send_lot_album(event.bot, event.chat.id, lot, reply_markup=markup)
 
 
 async def show_status(event: Event) -> None:
@@ -551,6 +568,7 @@ async def show_status(event: Event) -> None:
         filters = list(result.scalars().all())
         ids = [f.id for f in filters]
         lots_count = 0
+        watch_count = await watched_count(session, user.id)
         if ids:
             lots_count = int(
                 (
@@ -578,10 +596,33 @@ async def show_status(event: Event) -> None:
         f"Фильтров: {len(filters)} (активных {active})\n"
         f"Последняя проверка: {_fmt_dt(last_check)}\n"
         f"Всего запомненных лотов: {lots_count}\n"
+        f"Отслеживаю лотов: {watch_count}\n"
         f"Интервал: {settings.effective_poll_interval} мин "
         f"(минимум {settings.min_poll_interval_minutes})."
     )
     await _send(event, text, back_to_filters_keyboard())
+
+
+async def show_watch_list(event: Event, state: FSMContext, page: int = 0) -> None:
+    if not await require_access(event):
+        return
+    async with SessionLocal() as session:
+        user = await get_or_create_user(session, _chat_id(event))
+        rows = await list_watched(session, user.id)
+        await session.commit()
+    total = len(rows)
+    pages = max(1, (total + WATCH_PAGE_SIZE - 1) // WATCH_PAGE_SIZE) if total else 1
+    page = max(0, min(page, pages - 1))
+    await state.update_data(watch_page=page)
+    start = page * WATCH_PAGE_SIZE
+    chunk = rows[start : start + WATCH_PAGE_SIZE]
+    items = [(row.title, row.lot_url, row.last_bid, row.auction_raw) for row in rows]
+    markup_items = [(row.lot_external_id, row.title) for row in chunk]
+    await _send(
+        event,
+        watch_list_text(items, page=page, page_size=WATCH_PAGE_SIZE, total=total),
+        watched_list_keyboard(markup_items, page=page, total=total) if total else None,
+    )
 
 
 async def show_interval(event: Event) -> None:
@@ -757,6 +798,12 @@ async def kb_add(message: Message, state: FSMContext) -> None:
 async def cmd_status(message: Message, state: FSMContext) -> None:
     await state.clear()
     await show_status(message)
+
+
+@router.message(Command("watch"))
+@router.message(F.text == BTN_WATCH)
+async def cmd_watch(message: Message, state: FSMContext) -> None:
+    await show_watch_list(message, state)
 
 
 @router.message(Command("set_interval"))
@@ -1002,6 +1049,117 @@ async def cb_filter_actions(callback: CallbackQuery, state: FSMContext) -> None:
             return
 
     await callback.answer()
+
+
+async def _refresh_after_watch(callback: CallbackQuery, state: FSMContext, lot_id: str, watched: bool) -> None:
+    markup = getattr(callback.message, "reply_markup", None) if callback.message is not None else None
+    data = [btn.callback_data or "" for row in (markup.inline_keyboard if markup else []) for btn in row]
+    if any(item.startswith("flt:") and (":lots" in item or ":ph:" in item) for item in data):
+        browse = await state.get_data()
+        filter_id = browse.get("browse_filter_id")
+        page = int(browse.get("browse_page") or 0)
+        if filter_id:
+            await show_filter_lots(callback, state, int(filter_id), page)
+            return
+    if any(item.startswith("wch:ph:") or item.startswith("wch:p:") for item in data):
+        page = int((await state.get_data()).get("watch_page") or 0)
+        await show_watch_list(callback, state, page)
+        return
+    if callback.message is not None and hasattr(callback.message, "edit_reply_markup"):
+        try:
+            await callback.message.edit_reply_markup(
+                reply_markup=lot_watch_keyboard(lot_id, watched)
+            )
+        except TelegramBadRequest:
+            pass
+
+
+@router.callback_query(F.data.startswith("wch:"))
+async def cb_watch_actions(callback: CallbackQuery, state: FSMContext) -> None:
+    if not await require_access(callback):
+        return
+    parts = (callback.data or "").split(":", 2)
+    action = parts[1] if len(parts) > 1 else "l"
+    if action in {"l", "p"}:
+        page = 0
+        if action == "p" and len(parts) > 2:
+            try:
+                page = int(parts[2])
+            except ValueError:
+                page = 0
+        await show_watch_list(callback, state, page)
+        return
+    lot_id = parts[2] if len(parts) > 2 else ""
+    if not lot_id:
+        await callback.answer()
+        return
+    if action == "ph":
+        async with SessionLocal() as session:
+            user = await get_or_create_user(session, _chat_id(callback))
+            user_id = user.id
+            await session.commit()
+        try:
+            await callback.answer("Отправляю фото…")
+        except TelegramBadRequest:
+            pass
+        await send_watched_lot_photos(callback.bot, _chat_id(callback), user_id, lot_id)
+        return
+    if action != "t":
+        await callback.answer()
+        return
+
+    browse = await state.get_data()
+    cached = browse.get("browse_lots") if browse.get("browse_filter_id") else None
+    async with SessionLocal() as session:
+        user = await get_or_create_user(session, _chat_id(callback))
+        currently = await is_watched(session, user.id, lot_id)
+        if currently:
+            await remove_watch(session, user.id, lot_id)
+            await session.commit()
+            await callback.answer("Снял отслеживание")
+            await _refresh_after_watch(callback, state, lot_id, False)
+            return
+        lot = await resolve_lot(session, user.id, lot_id, cached)
+        if lot is None:
+            await session.commit()
+        else:
+            try:
+                await add_watch(session, user.id, lot)
+            except WatchLimitError as exc:
+                await session.commit()
+                await callback.answer(str(exc), show_alert=True)
+                return
+            await session.commit()
+            await callback.answer("Отслеживаю ❤️")
+            await _refresh_after_watch(callback, state, lot_id, True)
+            return
+
+    try:
+        await callback.answer("Ищу лот…")
+    except TelegramBadRequest:
+        pass
+    try:
+        fetched = await fetch_lot(lot_id)
+    except ParseError:
+        fetched = None
+    lot = fetched.lot if fetched is not None else None
+    if lot is None:
+        await callback.bot.send_message(
+            _chat_id(callback),
+            "Не нашёл этот лот на bid.cars, чтобы отслеживать.",
+        )
+        return
+    remember_lot(lot)
+    async with SessionLocal() as session:
+        user = await get_or_create_user(session, _chat_id(callback))
+        try:
+            await add_watch(session, user.id, lot)
+        except WatchLimitError as exc:
+            await session.commit()
+            await callback.bot.send_message(_chat_id(callback), str(exc))
+            return
+        await session.commit()
+    await _refresh_after_watch(callback, state, lot_id, True)
 
 
 async def _apply_interval(event: Event, minutes: int) -> None:

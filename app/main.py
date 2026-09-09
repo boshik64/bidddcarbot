@@ -15,6 +15,7 @@ from app.db import init_db
 from app.handlers import router
 from app.logging_setup import setup_logging
 from app.scheduler import poll_filters
+from app.watch import poll_watched_lots
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,7 @@ async def _set_commands(bot: Bot) -> None:
             BotCommand(command="start", description="Меню и кнопки"),
             BotCommand(command="list_filters", description="Мои фильтры"),
             BotCommand(command="add_filter", description="Добавить фильтр"),
+            BotCommand(command="watch", description="Отслеживаемые лоты"),
             BotCommand(command="status", description="Статистика"),
             BotCommand(command="set_interval", description="Интервал проверки"),
             BotCommand(command="help", description="Справка"),
@@ -56,6 +58,16 @@ async def main() -> None:
         coalesce=True,
         misfire_grace_time=60,
     )
+    scheduler.add_job(
+        poll_watched_lots,
+        "interval",
+        minutes=1,
+        args=[bot],
+        id="poll_watched_lots",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=60,
+    )
     scheduler.start()
     logger.info(
         "Scheduler started, default interval %s min, request delay %ss",
@@ -69,6 +81,7 @@ async def main() -> None:
     async def _kickoff() -> None:
         await asyncio.sleep(15)
         await poll_filters(bot)
+        await poll_watched_lots(bot)
 
     kickoff = asyncio.create_task(_kickoff())
 

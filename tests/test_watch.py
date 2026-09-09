@@ -1,0 +1,79 @@
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+
+from app.parser import LotData, is_lot_finished, lot_from_preview, lot_to_preview
+from app.watch import reminder_due, watch_changes
+
+
+def test_reminder_due_windows() -> None:
+    now = datetime(2026, 9, 10, 12, 0, tzinfo=timezone.utc)
+    in_20h = now + timedelta(hours=20)
+    in_90m = now + timedelta(minutes=90)
+    in_2d = now + timedelta(days=2)
+
+    assert reminder_due(in_20h, now=now, reminded_24h=False, reminded_2h=False) == "24h"
+    assert reminder_due(in_20h, now=now, reminded_24h=True, reminded_2h=False) is None
+    assert reminder_due(in_90m, now=now, reminded_24h=False, reminded_2h=False) == "2h"
+    assert reminder_due(in_90m, now=now, reminded_24h=True, reminded_2h=True) is None
+    assert reminder_due(in_2d, now=now, reminded_24h=False, reminded_2h=False) is None
+    assert reminder_due(now - timedelta(minutes=5), now=now, reminded_24h=False, reminded_2h=False) is None
+
+
+def test_watch_changes_price_and_auction() -> None:
+    row = SimpleNamespace(
+        last_bid="$400",
+        last_status="На ходу",
+        auction_raw="Tue 21 Apr, 13:00 GMT+2",
+    )
+    lot = LotData(
+        lot_external_id="0-1",
+        title="BMW",
+        url="https://bid.cars/en/lot/0-1/bmw",
+        current_bid="$625",
+        status="На ходу",
+        auction_raw="Wed 22 Apr, 13:00 GMT+2",
+    )
+    changes = watch_changes(row, lot)
+    assert any(" $400 → $625" in item for item in changes)
+    assert any("Аукцион" in item for item in changes)
+    same = watch_changes(row, LotData(
+        lot_external_id="0-1",
+        title="BMW",
+        url="https://bid.cars/en/lot/0-1/bmw",
+        current_bid="$400",
+        status="На ходу",
+        auction_raw="Tue 21 Apr, 13:00 GMT+2",
+    ))
+    assert same == []
+
+
+def test_lot_finished_from_archive() -> None:
+    lot = LotData(
+        lot_external_id="0-1",
+        title="BMW",
+        url="https://bid.cars/en/lot/0-1/bmw",
+        search_status="active",
+        final_bid="$2100",
+    )
+    assert is_lot_finished(lot, source="archived")
+    assert not is_lot_finished(lot, source="active")
+    lot.search_status = "sold"
+    assert is_lot_finished(lot, source="active")
+
+
+def test_preview_roundtrip_keeps_auction() -> None:
+    original = LotData(
+        lot_external_id="0-1",
+        title="BMW",
+        url="https://bid.cars/en/lot/0-1/bmw",
+        current_bid="$400",
+        auction_raw="Tue 21 Apr, 13:00 GMT+2",
+        auction_at=datetime(2027, 4, 21, 13, 0, tzinfo=timezone(timedelta(hours=2))),
+        search_status="active",
+    )
+    restored = lot_from_preview(lot_to_preview(original))
+    assert restored.lot_external_id == "0-1"
+    assert restored.current_bid == "$400"
+    assert restored.auction_raw == original.auction_raw
+    assert restored.auction_at is not None
+    assert restored.auction_at.isoformat() == original.auction_at.isoformat()

@@ -12,22 +12,31 @@ from app.parser import button_label
 
 BTN_FILTERS = "📋 Мои фильтры"
 BTN_ADD = "➕ Добавить"
+BTN_WATCH = "❤️ Отслеживание"
 BTN_STATUS = "📊 Статус"
 BTN_INTERVAL = "⏱ Интервал"
 BTN_SUB = "💎 Подписка"
 
-MENU_BUTTON_TEXTS = {BTN_FILTERS, BTN_ADD, BTN_STATUS, BTN_INTERVAL, BTN_SUB}
+MENU_BUTTON_TEXTS = {
+    BTN_FILTERS,
+    BTN_ADD,
+    BTN_WATCH,
+    BTN_STATUS,
+    BTN_INTERVAL,
+    BTN_SUB,
+}
 
 INTERVAL_PRESETS = (5, 10, 15, 30, 60, 120)
 LOTS_PAGE_SIZE = 10
+WATCH_PAGE_SIZE = 8
 
 
 def main_reply_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text=BTN_FILTERS), KeyboardButton(text=BTN_ADD)],
-            [KeyboardButton(text=BTN_STATUS), KeyboardButton(text=BTN_INTERVAL)],
-            [KeyboardButton(text=BTN_SUB)],
+            [KeyboardButton(text=BTN_WATCH), KeyboardButton(text=BTN_STATUS)],
+            [KeyboardButton(text=BTN_INTERVAL), KeyboardButton(text=BTN_SUB)],
         ],
         resize_keyboard=True,
         is_persistent=True,
@@ -138,7 +147,14 @@ def paywall_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def lots_page_keyboard(filter_id: int, page: int, total: int) -> InlineKeyboardMarkup:
+def lots_page_keyboard(
+    filter_id: int,
+    page: int,
+    total: int,
+    *,
+    page_lot_ids: list[str] | None = None,
+    watched_ids: set[str] | None = None,
+) -> InlineKeyboardMarkup:
     pages = max(1, (total + LOTS_PAGE_SIZE - 1) // LOTS_PAGE_SIZE) if total else 1
     nav: list[InlineKeyboardButton] = []
     if total and page > 0:
@@ -165,12 +181,62 @@ def lots_page_keyboard(filter_id: int, page: int, total: int) -> InlineKeyboardM
             )
         for i in range(0, len(photo_row), 5):
             rows.append(photo_row[i : i + 5])
+        if page_lot_ids:
+            watched_ids = watched_ids or set()
+            heart_row: list[InlineKeyboardButton] = []
+            for offset, lot_id in enumerate(page_lot_ids[:count]):
+                heart = "❤️" if lot_id in watched_ids else "🤍"
+                heart_row.append(
+                    InlineKeyboardButton(
+                        text=f"{heart} {start + offset + 1}",
+                        callback_data=f"wch:t:{lot_id}",
+                    )
+                )
+            for i in range(0, len(heart_row), 5):
+                rows.append(heart_row[i : i + 5])
     rows.append(
         [InlineKeyboardButton(text="🔄 Обновить", callback_data=f"flt:{filter_id}:lots")]
     )
     rows.append(
         [InlineKeyboardButton(text="⬅️ К карточке", callback_data=f"flt:{filter_id}")]
     )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def lot_watch_keyboard(lot_id: str, watched: bool) -> InlineKeyboardMarkup:
+    text = "❤️ Отслеживаю" if watched else "🤍 Отслеживать"
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=text, callback_data=f"wch:t:{lot_id}")]
+        ]
+    )
+
+
+def watched_list_keyboard(
+    items: list[tuple[str, str]],
+    *,
+    page: int,
+    total: int,
+) -> InlineKeyboardMarkup:
+    pages = max(1, (total + WATCH_PAGE_SIZE - 1) // WATCH_PAGE_SIZE) if total else 1
+    rows: list[list[InlineKeyboardButton]] = []
+    for lot_id, title in items:
+        label = title.strip() or lot_id
+        if len(label) > 28:
+            label = label[:27] + "…"
+        rows.append(
+            [
+                InlineKeyboardButton(text=f"📷 {label}", callback_data=f"wch:ph:{lot_id}"),
+                InlineKeyboardButton(text="💔", callback_data=f"wch:t:{lot_id}"),
+            ]
+        )
+    nav: list[InlineKeyboardButton] = []
+    if total and page > 0:
+        nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"wch:p:{page - 1}"))
+    if total and page + 1 < pages:
+        nav.append(InlineKeyboardButton(text="➡️", callback_data=f"wch:p:{page + 1}"))
+    if nav:
+        rows.append(nav)
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

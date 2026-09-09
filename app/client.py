@@ -11,7 +11,10 @@ from app.config import settings
 from app.parser import (
     FilterUrlError,
     LotData,
+    LotFetch,
+    extract_lang,
     filter_url_to_api_url,
+    lot_lookup_url,
     parse_search_json,
     validate_filter_url,
 )
@@ -129,6 +132,57 @@ class BidCarsClient:
             raise ParseError("Неожиданный формат JSON")
         return payload
 
+    async def _search_first_page(self, url: str) -> list[LotData]:
+        filter_url = validate_filter_url(url)
+        api_url = filter_url_to_api_url(filter_url, page=1)
+        payload = await self._get_json(api_url, referer=filter_url)
+        lots, _meta = parse_search_json(payload, source_url=filter_url)
+        return lots
+
+    def _pick_lot(self, lots: list[LotData], lot_id: str) -> LotData | None:
+        for lot in lots:
+            if lot.lot_external_id == lot_id:
+                return lot
+        return None
+
+    async def fetch_lot(
+        self,
+        lot_id: str,
+        *,
+        vin: str | None = None,
+        lang: str | None = None,
+        lot_url: str | None = None,
+    ) -> LotFetch:
+        lang = lang or extract_lang(lot_url or "https://bid.cars/en/")
+        queries: list[tuple[str, str]] = []
+        if vin:
+            queries.append((lot_lookup_url(lang, vin=vin, archived=False), "active"))
+        queries.append((lot_lookup_url(lang, query=lot_id, archived=False), "active"))
+        if vin:
+            queries.append((lot_lookup_url(lang, vin=vin, archived=True), "archived"))
+        queries.append((lot_lookup_url(lang, query=lot_id, archived=True), "archived"))
+
+        seen: set[str] = set()
+        errors: list[str] = []
+        tried = 0
+        for url, source in queries:
+            if url in seen:
+                continue
+            seen.add(url)
+            try:
+                lots = await self._search_first_page(url)
+            except ParseError as exc:
+                logger.warning("Lot lookup failed %s: %s", url, exc)
+                errors.append(str(exc))
+                continue
+            tried += 1
+            match = self._pick_lot(lots, lot_id)
+            if match is not None:
+                return LotFetch(lot=match, source=source)
+        if errors and tried == 0:
+            raise ParseError(errors[-1])
+        return LotFetch(lot=None, source="missing")
+
     async def parse_filter_with_total(self, url: str) -> tuple[list[LotData], int]:
         filter_url = validate_filter_url(url)
         collected: list[LotData] = []
@@ -180,12 +234,24 @@ async def parse_filter_with_total(url: str) -> tuple[list[LotData], int]:
     return await client.parse_filter_with_total(url)
 
 
+async def fetch_lot(
+    lot_id: str,
+    *,
+    vin: str | None = None,
+    lang: str | None = None,
+    lot_url: str | None = None,
+) -> LotFetch:
+    return await client.fetch_lot(lot_id, vin=vin, lang=lang, lot_url=lot_url)
+
+
 __all__ = [
     "ParseError",
     "FilterUrlError",
     "LotData",
+    "LotFetch",
     "parse_filter",
     "parse_filter_with_total",
+    "fetch_lot",
     "client",
     "rate_limiter",
 ]

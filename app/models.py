@@ -46,6 +46,7 @@ class User(Base):
 
     filters: Mapped[List["Filter"]] = relationship(back_populates="user")
     payments: Mapped[List["Payment"]] = relationship(back_populates="user")
+    watched_lots: Mapped[List["WatchedLot"]] = relationship(back_populates="user")
 
 
 class Filter(Base):
@@ -103,3 +104,34 @@ class Payment(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     user: Mapped["User"] = relationship(back_populates="payments")
+
+
+class WatchedLot(Base):
+    __tablename__ = "watched_lots"
+    __table_args__ = (
+        UniqueConstraint("user_id", "lot_external_id", name="uq_watched_lots_user_lot"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    lot_external_id: Mapped[str] = mapped_column(String(64), index=True)
+    lot_url: Mapped[str] = mapped_column(Text)
+    title: Mapped[str] = mapped_column(Text)
+    vin: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    last_bid: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    last_search_status: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    last_status: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    auction_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    auction_raw: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    reminded_24h: Mapped[bool] = mapped_column(Boolean, default=False)
+    reminded_2h: Mapped[bool] = mapped_column(Boolean, default=False)
+    consecutive_misses: Mapped[int] = mapped_column(Integer, default=0)
+    raw_data: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    last_checked_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    user: Mapped["User"] = relationship(back_populates="watched_lots")

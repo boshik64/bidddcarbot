@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
@@ -28,6 +29,43 @@ TG_ALBUM_MAX = 10
 TG_SLIDESHOW_MAX = 50
 
 
+_MONTHS = {
+    "jan": 1,
+    "feb": 2,
+    "mar": 3,
+    "apr": 4,
+    "may": 5,
+    "jun": 6,
+    "jul": 7,
+    "aug": 8,
+    "sep": 9,
+    "oct": 10,
+    "nov": 11,
+    "dec": 12,
+}
+
+ACTIVE_SEARCH_STATUSES = {"active", "live", "upcoming", "prebid", "buy now", "buy_now"}
+FINISHED_SEARCH_STATUSES = {
+    "sold",
+    "unsold",
+    "not sold",
+    "not_sold",
+    "archived",
+    "ended",
+    "closed",
+    "finished",
+    "completed",
+    "history",
+}
+
+_AUCTION_TIME_RE = re.compile(
+    r"(?P<day>\d{1,2})\s+(?P<mon>[A-Za-z]{3})[a-z]*,?\s+"
+    r"(?P<hour>\d{1,2}):(?P<minute>\d{2})"
+    r"(?:\s*(?:GMT|UTC)\s*(?P<sign>[+-])(?P<offh>\d{1,2})(?::?(?P<offm>\d{2}))?)?",
+    re.IGNORECASE,
+)
+
+
 @dataclass
 class LotData:
     lot_external_id: str
@@ -35,6 +73,8 @@ class LotData:
     url: str
     vin: str | None = None
     current_bid: str | None = None
+    buy_now: str | None = None
+    final_bid: str | None = None
     damage: str | None = None
     status: str | None = None
     location: str | None = None
@@ -43,7 +83,16 @@ class LotData:
     odometer_miles: int | None = None
     odometer_km: int | None = None
     search_status: str | None = None
+    auction_at: datetime | None = None
+    auction_raw: str | None = None
+    time_left: str | None = None
     raw: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class LotFetch:
+    lot: LotData | None
+    source: str  # active | archived | missing
 
 
 def _normalize_host(host: str) -> str:
@@ -148,6 +197,21 @@ def lot_page_url(lot: str, tag: str | None, lang: str = "en") -> str:
     return f"https://bid.cars/{lang}/lot/{lot}/{slug}"
 
 
+def lot_lookup_url(
+    lang: str,
+    *,
+    vin: str | None = None,
+    query: str | None = None,
+    archived: bool = False,
+) -> str:
+    path = f"/{lang}/search/archived/results" if archived else f"/{lang}/search/results"
+    if vin:
+        params = {"search-type": "vin", "query": vin, "vin": vin}
+    else:
+        params = {"search-type": "text", "query": query or ""}
+    return urlunparse(("https", "bid.cars", path, "", urlencode(params), ""))
+
+
 def _img_key_order(key: Any) -> tuple[int, str]:
     text = str(key)
     match = re.search(r"(\d+)$", text)
@@ -240,6 +304,112 @@ def _clean_text(value: Any) -> str | None:
     return text
 
 
+def _format_price(value: Any) -> str | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        number = f"{value:.0f}" if float(value).is_integer() else str(value)
+        return f"${number}"
+    return _clean_text(value)
+
+
+def parse_auction_time(value: Any, *, now: datetime | None = None) -> datetime | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        ts = float(value)
+        if ts > 1e12:
+            ts /= 1000
+        if ts > 1e9:
+            return datetime.fromtimestamp(ts, tz=timezone.utc)
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    now = now or datetime.now(timezone.utc)
+    iso = text.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(iso)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed
+    except ValueError:
+        pass
+    match = _AUCTION_TIME_RE.search(text)
+    if not match:
+        return None
+    mon = _MONTHS.get(match.group("mon")[:3].lower())
+    if not mon:
+        return None
+    try:
+        day = int(match.group("day"))
+        hour = int(match.group("hour"))
+        minute = int(match.group("minute"))
+        offh = int(match.group("offh") or 0)
+        offm = int(match.group("offm") or 0)
+    except (TypeError, ValueError):
+        return None
+    offset = timedelta(hours=offh, minutes=offm)
+    if (match.group("sign") or "+") == "-":
+        offset = -offset
+    try:
+        parsed = datetime(now.year, mon, day, hour, minute, tzinfo=timezone(offset))
+    except ValueError:
+        return None
+    if parsed < now - timedelta(days=14):
+        try:
+            parsed = parsed.replace(year=now.year + 1)
+        except ValueError:
+            pass
+    return parsed
+
+
+def _auction_raw(item: dict[str, Any]) -> str | None:
+    for key in (
+        "prebid_close_time",
+        "bid_close_time",
+        "buy_now_close_time",
+        "auction_date",
+        "sale_date",
+        "sale_time",
+    ):
+        value = _clean_text(item.get(key))
+        if value:
+            return value
+    return None
+
+
+def normalize_search_status(value: str | None) -> str:
+    return (value or "").strip().lower().replace("_", " ")
+
+
+def is_finished_status(status: str | None) -> bool:
+    text = normalize_search_status(status)
+    if not text or text in ACTIVE_SEARCH_STATUSES:
+        return False
+    if text in FINISHED_SEARCH_STATUSES:
+        return True
+    if "not sold" in text:
+        return True
+    if "sold" in text:
+        return True
+    return False
+
+
+def is_lot_finished(lot: LotData, *, source: str = "active") -> bool:
+    if source == "archived":
+        return True
+    if is_finished_status(lot.search_status):
+        return True
+    if source == "missing":
+        return False
+    return False
+
+
 def _map_status(start_code: str | None) -> str | None:
     if not start_code:
         return None
@@ -273,13 +443,22 @@ def lot_from_item(item: dict[str, Any], lang: str = "en") -> LotData | None:
     tag = _clean_text(item.get("tag"))
     photos = extract_image_urls(item.get("img_large")) or extract_image_urls(item.get("img"))
     miles, km = parse_odometer(item)
+    prebid = _format_price(item.get("prebid_price"))
+    buy_now = _format_price(item.get("buy_now_price"))
+    auction_raw = _auction_raw(item)
+    time_left = _clean_text(item.get("time_left_formatted")) or _clean_text(
+        item.get("time_left")
+    )
     return LotData(
         lot_external_id=lot_id,
         title=title,
         url=lot_page_url(lot_id, tag, lang=lang),
         vin=_clean_text(item.get("vin")),
-        current_bid=_clean_text(item.get("prebid_price"))
-        or _clean_text(item.get("buy_now_price")),
+        current_bid=prebid or buy_now,
+        buy_now=buy_now,
+        final_bid=_format_price(item.get("final_bid"))
+        or _format_price(item.get("finalBid"))
+        or _format_price(item.get("final_bid_raw")),
         damage=_damage_line(item),
         status=_map_status(_clean_text(item.get("start_code"))),
         location=_clean_text(item.get("location")),
@@ -288,7 +467,67 @@ def lot_from_item(item: dict[str, Any], lang: str = "en") -> LotData | None:
         odometer_miles=miles,
         odometer_km=km,
         search_status=_clean_text(item.get("search_status")),
+        auction_at=parse_auction_time(auction_raw),
+        auction_raw=auction_raw,
+        time_left=time_left,
         raw=item,
+    )
+
+
+def lot_to_preview(lot: LotData) -> dict[str, Any]:
+    return {
+        "id": lot.lot_external_id,
+        "title": lot.title,
+        "url": lot.url,
+        "current_bid": lot.current_bid,
+        "buy_now": lot.buy_now,
+        "final_bid": lot.final_bid,
+        "status": lot.status,
+        "location": lot.location,
+        "vin": lot.vin,
+        "damage": lot.damage,
+        "odometer_miles": lot.odometer_miles,
+        "odometer_km": lot.odometer_km,
+        "photo_url": lot.photo_url,
+        "photo_urls": list(lot.photo_urls or []),
+        "search_status": lot.search_status,
+        "auction_at": lot.auction_at.isoformat() if lot.auction_at else None,
+        "auction_raw": lot.auction_raw,
+        "time_left": lot.time_left,
+        "raw": lot.raw or {},
+    }
+
+
+def lot_from_preview(data: dict[str, Any]) -> LotData:
+    photos = [str(url) for url in (data.get("photo_urls") or []) if url]
+    auction_at = None
+    raw_at = data.get("auction_at")
+    if raw_at:
+        try:
+            auction_at = datetime.fromisoformat(str(raw_at))
+        except ValueError:
+            auction_at = parse_auction_time(raw_at)
+    raw = data.get("raw") if isinstance(data.get("raw"), dict) else {}
+    return LotData(
+        lot_external_id=str(data.get("id") or ""),
+        title=str(data.get("title") or "Лот"),
+        url=str(data.get("url") or ""),
+        current_bid=data.get("current_bid"),
+        buy_now=data.get("buy_now"),
+        final_bid=data.get("final_bid"),
+        status=data.get("status"),
+        location=data.get("location"),
+        vin=data.get("vin"),
+        damage=data.get("damage"),
+        odometer_miles=data.get("odometer_miles"),
+        odometer_km=data.get("odometer_km"),
+        photo_url=data.get("photo_url") or (photos[0] if photos else None),
+        photo_urls=photos,
+        search_status=data.get("search_status"),
+        auction_at=auction_at,
+        auction_raw=data.get("auction_raw"),
+        time_left=data.get("time_left"),
+        raw=raw,
     )
 
 

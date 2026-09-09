@@ -131,6 +131,11 @@ def test_parse_fixture_lots() -> None:
     assert first.odometer_miles == 32431
     assert first.odometer_km == 52193
     assert first.url.startswith("https://bid.cars/ru/lot/0-45732519/")
+    assert first.auction_raw == "Tue 21 Apr, 13:00 GMT+2"
+    assert first.auction_at is not None
+    assert first.auction_at.month == 4
+    assert first.auction_at.day == 21
+    assert first.time_left == "12d 4h"
 
     second = lots[1]
     assert second.status == "Не на ходу"
@@ -177,3 +182,41 @@ def test_simple_paginator_stops_without_last_page() -> None:
 def test_skip_item_without_lot_id() -> None:
     lot = lot_from_item({"name": "broken"})
     assert lot is None
+
+
+def test_lot_lookup_urls() -> None:
+    from app.parser import lot_lookup_url
+
+    active = lot_lookup_url("en", vin="4T1G11AK1MU486913", archived=False)
+    assert "/en/search/results" in active
+    assert "search-type=vin" in active
+    assert "4T1G11AK1MU486913" in active
+    archived = lot_lookup_url("ru", query="0-45732519", archived=True)
+    assert "/ru/search/archived/results" in archived
+    assert "search-type=text" in archived
+    assert "0-45732519" in archived
+
+
+def test_parse_auction_time_bidcars_format() -> None:
+    from datetime import datetime, timezone
+
+    from app.parser import parse_auction_time
+
+    now = datetime(2026, 9, 10, tzinfo=timezone.utc)
+    parsed = parse_auction_time("Tue 21 Apr, 13:00 GMT+2", now=now)
+    assert parsed is not None
+    assert parsed.year == 2027
+    assert parsed.month == 4
+    assert parsed.day == 21
+    assert parsed.hour == 13
+    assert parsed.utcoffset().total_seconds() == 2 * 3600
+
+
+def test_finished_search_status() -> None:
+    from app.parser import is_finished_status
+
+    assert is_finished_status("sold")
+    assert is_finished_status("not sold")
+    assert is_finished_status("archived")
+    assert not is_finished_status("active")
+    assert not is_finished_status("live")

@@ -1,5 +1,13 @@
-from app.formatting import filter_card_text, lot_caption, lots_page_text
-from app.keyboards import LOTS_PAGE_SIZE, lots_page_keyboard
+from app.formatting import (
+    filter_card_text,
+    lot_caption,
+    lots_page_text,
+    watch_list_text,
+    watch_reminder_text,
+    watch_sale_text,
+    watch_update_text,
+)
+from app.keyboards import LOTS_PAGE_SIZE, lot_watch_keyboard, lots_page_keyboard
 from app.lot_send import album_photo_urls, lot_article_html, slideshow_rich_message
 from app.parser import LotData, TG_ALBUM_MAX, TG_SLIDESHOW_MAX, format_mileage
 
@@ -25,6 +33,9 @@ def test_lot_caption_contains_core_fields() -> None:
     assert "На ходу" in text
     assert "Houston (TX)" in text
     assert "Открыть лот" in text
+    lot.auction_raw = "Tue 21 Apr, 13:00 GMT+2"
+    assert "Аукцион" in lot_caption(lot)
+    assert "Tue 21 Apr" in lot_caption(lot)
 
 
 def test_filter_card_text() -> None:
@@ -91,6 +102,17 @@ def test_lots_page_keyboard_navigation() -> None:
     assert "flt:7:lots:3" not in last_data
     assert "flt:7:ph:0" in first_data
     assert "flt:7:ph:20" in last_data
+    assert "wch:t:" not in " ".join(first_data)
+
+    hearts = lots_page_keyboard(
+        7, 0, 25, page_lot_ids=["0-1", "0-2"], watched_ids={"0-1"}
+    )
+    heart_data = [btn.callback_data for row in hearts.inline_keyboard for btn in row]
+    heart_labels = [btn.text for row in hearts.inline_keyboard for btn in row]
+    assert "wch:t:0-1" in heart_data
+    assert "wch:t:0-2" in heart_data
+    assert any(text.startswith("❤️") for text in heart_labels)
+    assert any(text.startswith("🤍") for text in heart_labels)
 
 
 def test_format_mileage_converts_miles_to_km() -> None:
@@ -139,3 +161,45 @@ def test_slideshow_rich_message_payload() -> None:
     assert payload["media"][0]["id"] == "p0"
     assert payload["media"][0]["media"]["type"] == "photo"
     assert payload["media"][1]["media"]["media"] == "https://b.jpg"
+
+
+def test_watch_messages() -> None:
+    update = watch_update_text(
+        "BMW",
+        "https://bid.cars/en/lot/0-1/bmw",
+        ["💰 Ставка: $400 → $625"],
+    )
+    assert "Обновление" in update
+    assert "$625" in update
+    reminder = watch_reminder_text(
+        "BMW",
+        "https://bid.cars/en/lot/0-1/bmw",
+        "24h",
+        bid="$625",
+        auction_raw="Tue 21 Apr, 13:00 GMT+2",
+    )
+    assert "24 часа" in reminder
+    sale = watch_sale_text(
+        "BMW",
+        "https://bid.cars/en/lot/0-1/bmw",
+        price="$2 100",
+        search_status="sold",
+    )
+    assert "продан" in sale.lower()
+    assert "$2 100" in sale
+    listing = watch_list_text(
+        [("BMW", "https://bid.cars/en/lot/0-1/bmw", "$400", "Tue 21 Apr")],
+        page=0,
+        page_size=8,
+        total=1,
+    )
+    assert "Отслеживаемые" in listing
+    assert "$400" in listing
+
+
+def test_lot_watch_keyboard_toggles_label() -> None:
+    on = lot_watch_keyboard("0-1", True)
+    off = lot_watch_keyboard("0-1", False)
+    assert on.inline_keyboard[0][0].callback_data == "wch:t:0-1"
+    assert "Отслеживаю" in on.inline_keyboard[0][0].text
+    assert "Отслеживать" in off.inline_keyboard[0][0].text

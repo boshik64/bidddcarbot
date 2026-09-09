@@ -16,6 +16,7 @@ from app.db import SessionLocal
 from app.lot_send import send_lot_album
 from app.models import Filter, SeenLot, as_utc, utcnow
 from app.parser import LotData
+from app.watch import watch_markup_for
 
 logger = logging.getLogger(__name__)
 
@@ -35,9 +36,10 @@ def _is_due(filt: Filter) -> bool:
     return delta >= timedelta(minutes=_interval_for(filt))
 
 
-async def _send_lot(bot: Bot, chat_id: int, lot: LotData) -> None:
+async def _send_lot(bot: Bot, chat_id: int, lot: LotData, user_id: int) -> None:
     try:
-        await send_lot_album(bot, chat_id, lot)
+        markup = await watch_markup_for(user_id, lot.lot_external_id)
+        await send_lot_album(bot, chat_id, lot, reply_markup=markup)
     except TelegramAPIError as exc:
         logger.warning("Failed to send lot %s to %s: %s", lot.lot_external_id, chat_id, exc)
 
@@ -111,7 +113,7 @@ async def _process_filter(bot: Bot, filt: Filter) -> None:
         logger.warning("Could not send header to %s", chat_id)
 
     for lot in to_send:
-        await _send_lot(bot, chat_id, lot)
+        await _send_lot(bot, chat_id, lot, filt.user_id)
         await asyncio.sleep(0.4)
 
     if skipped:
