@@ -25,6 +25,7 @@ class FilterUrlError(ValueError):
 
 KM_PER_MILE = 1.609344
 TG_ALBUM_MAX = 10
+TG_SLIDESHOW_MAX = 20
 
 
 @dataclass

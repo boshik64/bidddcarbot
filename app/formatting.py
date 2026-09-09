@@ -99,7 +99,7 @@ def lots_page_text(
     header = (
         f"Текущие лоты фильтра <b>#{filter_id}</b> — {escape(title)}\n"
         f"Страница {page + 1} из {pages} · всего {total}\n"
-        "Кнопки 📷 — пролистать фото авто в Telegram."
+        "Кнопки 📷 — фото лота каруселью в Telegram."
     )
     if not total:
         return header + "\n\nСейчас по фильтру нет лотов."

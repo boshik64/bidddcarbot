@@ -1,7 +1,7 @@
 from app.formatting import filter_card_text, lot_caption, lots_page_text
 from app.keyboards import LOTS_PAGE_SIZE, lots_page_keyboard
-from app.lot_send import album_photo_urls
-from app.parser import LotData, TG_ALBUM_MAX, format_mileage
+from app.lot_send import album_photo_urls, lot_article_html, slideshow_rich_message
+from app.parser import LotData, TG_ALBUM_MAX, TG_SLIDESHOW_MAX, format_mileage
 
 
 def test_lot_caption_contains_core_fields() -> None:
@@ -106,6 +106,26 @@ def test_album_never_exceeds_telegram_limit() -> None:
         url="https://bid.cars/en/lot/1/car",
         photo_urls=urls,
     )
-    album = album_photo_urls(lot)
+    album = album_photo_urls(lot, limit=TG_ALBUM_MAX)
     assert len(album) == TG_ALBUM_MAX
     assert album[0].endswith("-1.jpg")
+    slideshow = album_photo_urls(lot)
+    assert len(slideshow) == TG_SLIDESHOW_MAX
+
+
+def test_lot_article_html_wraps_photos_in_slideshow() -> None:
+    html = lot_article_html("<b>BMW</b>\n<a href=\"https://bid.cars/x\">лот</a>", ["p0", "p1", "p2"])
+    assert html.startswith("<slideshow>")
+    assert '<img src="tg://photo?id=p0">' in html
+    assert '<img src="tg://photo?id=p2">' in html
+    assert "</slideshow>" in html
+    assert "<p><b>BMW</b></p>" in html
+    assert "https://bid.cars/x" in html
+
+
+def test_slideshow_rich_message_payload() -> None:
+    payload = slideshow_rich_message("hello", ["https://a.jpg", "https://b.jpg"])
+    assert payload["html"].startswith("<slideshow>")
+    assert payload["media"][0]["id"] == "p0"
+    assert payload["media"][0]["media"]["type"] == "photo"
+    assert payload["media"][1]["media"]["media"] == "https://b.jpg"
