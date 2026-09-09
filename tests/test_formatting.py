@@ -115,17 +115,19 @@ def test_album_never_exceeds_telegram_limit() -> None:
 
 def test_lot_article_html_wraps_photos_in_slideshow() -> None:
     html = lot_article_html("<b>BMW</b>\n<a href=\"https://bid.cars/x\">лот</a>", ["p0", "p1", "p2"])
-    assert html.startswith("<slideshow>")
-    assert '<img src="tg://photo?id=p0">' in html
-    assert '<img src="tg://photo?id=p2">' in html
-    assert "</slideshow>" in html
+    assert html.startswith("<tg-slideshow>")
+    assert '<img src="p0">' in html
+    assert '<img src="p2">' in html
+    assert "</tg-slideshow>" in html
+    assert "<slideshow>" not in html
     assert "<p><b>BMW</b></p>" in html
     assert "https://bid.cars/x" in html
 
 
 def test_slideshow_rich_message_payload() -> None:
     payload = slideshow_rich_message("hello", ["https://a.jpg", "https://b.jpg"])
-    assert payload["html"].startswith("<slideshow>")
+    assert payload["html"].startswith("<tg-slideshow>")
+    assert '<img src="tg://photo?id=p0">' in payload["html"]
     assert payload["media"][0]["id"] == "p0"
     assert payload["media"][0]["media"]["type"] == "photo"
     assert payload["media"][1]["media"]["media"] == "https://b.jpg"
