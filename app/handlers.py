@@ -45,7 +45,6 @@ from app.keyboards import (
     BTN_INTERVAL,
     BTN_STATUS,
     BTN_SUB,
-    BTN_WATCH,
     MENU_BUTTON_TEXTS,
     WATCH_PAGE_SIZE,
     add_filter_keyboard,
@@ -55,6 +54,7 @@ from app.keyboards import (
     filter_card_keyboard,
     filters_keyboard,
     interval_keyboard,
+    is_watch_button,
     LOTS_PAGE_SIZE,
     invoice_keyboard,
     lot_watch_keyboard,
@@ -78,6 +78,8 @@ from app.watch import (
     add_watch,
     is_watched,
     list_watched,
+    remaining_from_watch,
+    refresh_user_watched,
     remove_watch,
     resolve_lot,
     send_watched_lot_photos,
@@ -603,26 +605,76 @@ async def show_status(event: Event) -> None:
     await _send(event, text, back_to_filters_keyboard())
 
 
-async def show_watch_list(event: Event, state: FSMContext, page: int = 0) -> None:
+async def show_watch_list(
+    event: Event,
+    state: FSMContext,
+    page: int = 0,
+    *,
+    refresh: bool = True,
+) -> None:
     if not await require_access(event):
         return
+    wait_msg = None
+    if refresh:
+        if isinstance(event, CallbackQuery):
+            try:
+                await event.answer("Обновляю…")
+            except TelegramBadRequest:
+                pass
+            if event.message is not None:
+                try:
+                    await event.message.edit_text("Обновляю отслеживаемые лоты…")
+                except TelegramBadRequest:
+                    pass
+        else:
+            wait_msg = await event.answer(
+                "Обновляю отслеживаемые лоты…",
+                reply_markup=main_reply_keyboard(),
+            )
     async with SessionLocal() as session:
         user = await get_or_create_user(session, _chat_id(event))
-        rows = await list_watched(session, user.id)
+        user_id = user.id
+        rows: list = []
+        removed: list[str] = []
+        if not refresh:
+            rows = await list_watched(session, user_id)
         await session.commit()
+    if refresh:
+        rows, removed = await refresh_user_watched(user_id)
     total = len(rows)
     pages = max(1, (total + WATCH_PAGE_SIZE - 1) // WATCH_PAGE_SIZE) if total else 1
     page = max(0, min(page, pages - 1))
     await state.update_data(watch_page=page)
     start = page * WATCH_PAGE_SIZE
     chunk = rows[start : start + WATCH_PAGE_SIZE]
-    items = [(row.title, row.lot_url, row.last_bid, row.auction_raw) for row in rows]
+    items = [
+        (
+            row.title,
+            row.lot_url,
+            row.last_bid,
+            row.auction_raw,
+            remaining_from_watch(row),
+        )
+        for row in rows
+    ]
     markup_items = [(row.lot_external_id, row.title) for row in chunk]
-    await _send(
-        event,
-        watch_list_text(items, page=page, page_size=WATCH_PAGE_SIZE, total=total),
-        watched_list_keyboard(markup_items, page=page, total=total),
-    )
+    text = watch_list_text(items, page=page, page_size=WATCH_PAGE_SIZE, total=total)
+    if removed:
+        names = ", ".join(escape(name) for name in removed[:5])
+        extra = f"Снял с отслеживания (уже не активны): {names}"
+        if len(removed) > 5:
+            extra += f" и ещё {len(removed) - 5}"
+        text = extra + ".\n\n" + text
+    markup = watched_list_keyboard(markup_items, page=page, total=total)
+    if wait_msg is not None:
+        try:
+            await wait_msg.edit_text(
+                text, reply_markup=markup, disable_web_page_preview=True
+            )
+            return
+        except TelegramBadRequest:
+            pass
+    await _send(event, text, markup)
 
 
 async def show_interval(event: Event) -> None:
@@ -801,7 +853,7 @@ async def cmd_status(message: Message, state: FSMContext) -> None:
 
 
 @router.message(Command("watch"))
-@router.message(F.text == BTN_WATCH)
+@router.message(F.text.func(is_watch_button))
 async def cmd_watch(message: Message, state: FSMContext) -> None:
     await show_watch_list(message, state)
 
@@ -876,7 +928,7 @@ async def god_password(message: Message, state: FSMContext) -> None:
     await message.answer(f"Бессрочный доступ выдан: <code>{target_id}</code>")
 
 
-@router.message(PayStates.waiting_tx, F.text, ~F.text.startswith("/"), ~F.text.in_(MENU_BUTTON_TEXTS))
+@router.message(PayStates.waiting_tx, F.text, ~F.text.startswith("/"), ~F.text.in_(MENU_BUTTON_TEXTS), ~F.text.func(is_watch_button))
 async def got_tx_hash(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     plan = data.get("plan")
@@ -901,7 +953,7 @@ async def cmd_legacy_manage(message: Message, state: FSMContext) -> None:
     await show_filter_list(message)
 
 
-@router.message(AddFilterStates.waiting_url, F.text, ~F.text.startswith("/"), ~F.text.in_(MENU_BUTTON_TEXTS))
+@router.message(AddFilterStates.waiting_url, F.text, ~F.text.startswith("/"), ~F.text.in_(MENU_BUTTON_TEXTS), ~F.text.func(is_watch_button))
 async def got_filter_url(message: Message, state: FSMContext) -> None:
     text = (message.text or "").strip()
     await state.clear()
@@ -1068,7 +1120,7 @@ async def _refresh_after_watch(callback: CallbackQuery, state: FSMContext, lot_i
             return
     if any(item.startswith("wch:ph:") or item.startswith("wch:p:") for item in data):
         page = int((await state.get_data()).get("watch_page") or 0)
-        await show_watch_list(callback, state, page)
+        await show_watch_list(callback, state, page, refresh=False)
         return
     if callback.message is not None and hasattr(callback.message, "edit_reply_markup"):
         try:
@@ -1092,7 +1144,7 @@ async def cb_watch_actions(callback: CallbackQuery, state: FSMContext) -> None:
                 page = int(parts[2])
             except ValueError:
                 page = 0
-        await show_watch_list(callback, state, page)
+        await show_watch_list(callback, state, page, refresh=(action == "l"))
         return
     lot_id = parts[2] if len(parts) > 2 else ""
     if not lot_id:

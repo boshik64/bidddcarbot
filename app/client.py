@@ -152,15 +152,17 @@ class BidCarsClient:
         vin: str | None = None,
         lang: str | None = None,
         lot_url: str | None = None,
+        include_archived: bool = True,
     ) -> LotFetch:
         lang = lang or extract_lang(lot_url or "https://bid.cars/en/")
         queries: list[tuple[str, str]] = []
         if vin:
             queries.append((lot_lookup_url(lang, vin=vin, archived=False), "active"))
         queries.append((lot_lookup_url(lang, query=lot_id, archived=False), "active"))
-        if vin:
-            queries.append((lot_lookup_url(lang, vin=vin, archived=True), "archived"))
-        queries.append((lot_lookup_url(lang, query=lot_id, archived=True), "archived"))
+        if include_archived:
+            if vin:
+                queries.append((lot_lookup_url(lang, vin=vin, archived=True), "archived"))
+            queries.append((lot_lookup_url(lang, query=lot_id, archived=True), "archived"))
 
         seen: set[str] = set()
         errors: list[str] = []
@@ -240,8 +242,15 @@ async def fetch_lot(
     vin: str | None = None,
     lang: str | None = None,
     lot_url: str | None = None,
+    include_archived: bool = True,
 ) -> LotFetch:
-    return await client.fetch_lot(lot_id, vin=vin, lang=lang, lot_url=lot_url)
+    return await client.fetch_lot(
+        lot_id,
+        vin=vin,
+        lang=lang,
+        lot_url=lot_url,
+        include_archived=include_archived,
+    )
 
 
 __all__ = [

@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from app.parser import LotData, is_lot_finished, lot_from_preview, lot_to_preview
-from app.watch import reminder_due, watch_changes
+from app.watch import remaining_from_auction, reminder_due, watch_changes
 
 
 def test_reminder_due_windows() -> None:
@@ -16,7 +16,8 @@ def test_reminder_due_windows() -> None:
     assert reminder_due(in_90m, now=now, reminded_24h=False, reminded_2h=False) == "2h"
     assert reminder_due(in_90m, now=now, reminded_24h=True, reminded_2h=True) is None
     assert reminder_due(in_2d, now=now, reminded_24h=False, reminded_2h=False) is None
-    assert reminder_due(now - timedelta(minutes=5), now=now, reminded_24h=False, reminded_2h=False) is None
+    assert remaining_from_auction(now + timedelta(hours=2, minutes=5), now=now) == "2 ч 5 мин"
+    assert remaining_from_auction(now - timedelta(minutes=1), now=now) == "идёт аукцион"
 
 
 def test_watch_changes_price_and_auction() -> None:

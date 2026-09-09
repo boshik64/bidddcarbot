@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -17,6 +19,20 @@ BTN_STATUS = "📊 Статус"
 BTN_INTERVAL = "⏱ Интервал"
 BTN_SUB = "💎 Подписка"
 
+WATCH_BUTTON_RE = re.compile(r"(?i)^\W*отслежива")
+BTN_WATCH_ALIASES = frozenset(
+    {
+        BTN_WATCH,
+        "❤️ Отслеживание",
+        "❤ Отслеживаемые",
+        "❤ Отслеживание",
+        "♥️ Отслеживаемые",
+        "♥️ Отслеживание",
+        "Отслеживаемые",
+        "Отслеживание",
+    }
+)
+
 MENU_BUTTON_TEXTS = {
     BTN_FILTERS,
     BTN_ADD,
@@ -24,7 +40,16 @@ MENU_BUTTON_TEXTS = {
     BTN_STATUS,
     BTN_INTERVAL,
     BTN_SUB,
+    *BTN_WATCH_ALIASES,
 }
+
+
+def is_watch_button(text: str | None) -> bool:
+    if not text:
+        return False
+    if text in BTN_WATCH_ALIASES:
+        return True
+    return bool(WATCH_BUTTON_RE.match(text.replace("\ufe0f", "")))
 
 INTERVAL_PRESETS = (5, 10, 15, 30, 60, 120)
 LOTS_PAGE_SIZE = 10
@@ -243,6 +268,9 @@ def watched_list_keyboard(
         nav.append(InlineKeyboardButton(text="➡️", callback_data=f"wch:p:{page + 1}"))
     if nav:
         rows.append(nav)
+    rows.append(
+        [InlineKeyboardButton(text="🔄 Обновить", callback_data="wch:l")]
+    )
     rows.append(
         [InlineKeyboardButton(text="⬅️ К фильтрам", callback_data="nav:filters")]
     )

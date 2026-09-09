@@ -7,7 +7,12 @@ from app.formatting import (
     watch_sale_text,
     watch_update_text,
 )
-from app.keyboards import LOTS_PAGE_SIZE, lot_watch_keyboard, lots_page_keyboard
+from app.keyboards import (
+    LOTS_PAGE_SIZE,
+    is_watch_button,
+    lot_watch_keyboard,
+    lots_page_keyboard,
+)
 from app.lot_send import album_photo_urls, lot_article_html, slideshow_rich_message
 from app.parser import LotData, TG_ALBUM_MAX, TG_SLIDESHOW_MAX, format_mileage
 
@@ -192,13 +197,14 @@ def test_watch_messages() -> None:
     assert "продан" in sale.lower()
     assert "$2 100" in sale
     listing = watch_list_text(
-        [("BMW", "https://bid.cars/en/lot/0-1/bmw", "$400", "Tue 21 Apr")],
+        [("BMW", "https://bid.cars/en/lot/0-1/bmw", "$400", "Tue 21 Apr", "1 д 20 ч")],
         page=0,
         page_size=8,
         total=1,
     )
     assert "Отслеживаемые" in listing
     assert "$400" in listing
+    assert "1 д 20 ч" in listing
 
 
 def test_lot_watch_keyboard_toggles_label() -> None:
@@ -207,3 +213,13 @@ def test_lot_watch_keyboard_toggles_label() -> None:
     assert on.inline_keyboard[0][0].callback_data == "wch:t:0-1"
     assert "Отслеживаю" in on.inline_keyboard[0][0].text
     assert "Отслеживать" in off.inline_keyboard[0][0].text
+
+
+def test_watch_button_recognizes_old_and_new_labels() -> None:
+    assert is_watch_button("❤️ Отслеживаемые")
+    assert is_watch_button("❤️ Отслеживание")
+    assert is_watch_button("❤ Отслеживание")
+    assert is_watch_button("Отслеживание")
+    assert is_watch_button("отслеживаемые")
+    assert not is_watch_button("📋 Мои фильтры")
+    assert not is_watch_button("привет")

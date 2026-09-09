@@ -26,7 +26,15 @@ from app.formatting import (
 from app.keyboards import lot_watch_keyboard
 from app.lot_send import recalled_lot, remember_lot, send_lot_album
 from app.models import Filter, SeenLot, WatchedLot, as_utc, utcnow
-from app.parser import LotData, LotFetch, extract_lang, is_lot_finished, lot_from_item, lot_from_preview
+from app.parser import (
+    LotData,
+    LotFetch,
+    extract_lang,
+    format_time_left,
+    is_lot_finished,
+    lot_from_item,
+    lot_from_preview,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +73,28 @@ def reminder_due(
         return None
     if remaining <= timedelta(hours=24) and not reminded_24h:
         return "24h"
+    return None
+
+
+def remaining_from_auction(auction_at, *, now=None) -> str | None:
+    when = as_utc(auction_at)
+    if when is None:
+        return None
+    now = now or utcnow()
+    seconds = int((when - now).total_seconds())
+    if seconds <= 0:
+        return "идёт аукцион"
+    return format_time_left(seconds)
+
+
+def remaining_from_watch(row: WatchedLot) -> str | None:
+    text = remaining_from_auction(row.auction_at)
+    if text:
+        return text
+    if isinstance(row.raw_data, dict) and row.raw_data:
+        parsed = lot_from_item(row.raw_data, lang=extract_lang(row.lot_url or ""))
+        if parsed is not None:
+            return remaining_from_auction(parsed.auction_at) or parsed.time_left
     return None
 
 
@@ -180,6 +210,45 @@ async def list_watched(session: AsyncSession, user_id: int) -> list[WatchedLot]:
         .order_by(WatchedLot.created_at.desc())
     )
     return list(result.scalars().all())
+
+
+async def refresh_user_watched(user_id: int) -> tuple[list[WatchedLot], list[str]]:
+    async with SessionLocal() as session:
+        rows = await list_watched(session, user_id)
+        specs = [
+            (row.id, row.lot_external_id, row.vin, row.lot_url) for row in rows
+        ]
+    removed: list[str] = []
+    for watch_id, lot_id, vin, lot_url in specs:
+        try:
+            fetched = await fetch_lot(
+                lot_id,
+                vin=vin,
+                lot_url=lot_url,
+                include_archived=False,
+            )
+        except ParseError as exc:
+            logger.warning("Watch list refresh failed for %s: %s", lot_id, exc)
+            continue
+        async with SessionLocal() as session:
+            row = await session.get(WatchedLot, watch_id)
+            if row is None:
+                continue
+            if fetched.lot is None:
+                row.last_checked_at = utcnow()
+                await session.commit()
+                continue
+            remember_lot(fetched.lot)
+            if is_lot_finished(fetched.lot, source=fetched.source):
+                removed.append(row.title or lot_id)
+                await session.delete(row)
+                await session.commit()
+                continue
+            apply_lot_to_watch(row, fetched.lot)
+            await session.commit()
+    async with SessionLocal() as session:
+        fresh = await list_watched(session, user_id)
+    return fresh, removed
 
 
 async def add_watch(session: AsyncSession, user_id: int, lot: LotData) -> bool:

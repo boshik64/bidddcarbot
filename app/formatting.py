@@ -208,7 +208,7 @@ def watch_missing_text(title: str, url: str) -> str:
 
 
 def watch_list_text(
-    items: list[tuple[str, str, str | None, str | None]],
+    items: list[tuple[str, str, str | None, str | None, str | None]],
     *,
     page: int,
     page_size: int,
@@ -219,20 +219,21 @@ def watch_list_text(
     header = (
         "❤️ <b>Отслеживаемые лоты</b>\n"
         f"Страница {page + 1} из {pages} · всего {total}\n"
-        "Пришлю изменение ставки, напомню за 24 и 2 часа до аукциона "
-        "и отпишу после продажи."
+        "Цена и время обновляются при открытии списка."
     )
     if not total:
         return header + "\n\nПока пусто. Нажми ❤️ на карточке лота."
     start = page * page_size
     chunk = items[start : start + page_size]
     blocks: list[str] = []
-    for offset, (title, url, bid, auction_raw) in enumerate(chunk):
+    for offset, (title, url, bid, auction_raw, time_left) in enumerate(chunk):
         idx = start + offset + 1
         line = f"{idx}. {_lot_link(title, url)}"
         bits: list[str] = []
         if bid:
             bits.append(f"💰 {escape(bid)}")
+        if time_left:
+            bits.append(f"⏳ {escape(time_left)}")
         if auction_raw:
             bits.append(f"🕒 {escape(_clip(auction_raw, 40))}")
         if bits:
