@@ -78,3 +78,22 @@ def test_preview_roundtrip_keeps_auction() -> None:
     assert restored.auction_raw == original.auction_raw
     assert restored.auction_at is not None
     assert restored.auction_at.isoformat() == original.auction_at.isoformat()
+
+
+def test_watch_changes_ignores_auction_text_when_time_same() -> None:
+    when = datetime(2026, 9, 11, 20, 0, tzinfo=timezone(timedelta(hours=2)))
+    row = SimpleNamespace(
+        last_bid="$550",
+        last_status=None,
+        auction_raw="пт 11 сент., 20:00 GMT+2",
+        auction_at=when,
+    )
+    lot = LotData(
+        lot_external_id="1-52519866",
+        title="BMW",
+        url="https://bid.cars/en/lot/1-52519866/bmw",
+        current_bid="$550",
+        auction_raw="2026-09-11 20:00:00",
+        auction_at=when,
+    )
+    assert watch_changes(row, lot) == []

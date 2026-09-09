@@ -610,27 +610,26 @@ async def show_watch_list(
     state: FSMContext,
     page: int = 0,
     *,
-    refresh: bool = True,
+    refresh: bool = False,
 ) -> None:
     if not await require_access(event):
         return
     wait_msg = None
-    if refresh:
-        if isinstance(event, CallbackQuery):
+    if isinstance(event, Message):
+        wait_msg = await event.answer(
+            "Обновляю отслеживаемые лоты…" if refresh else "Отслеживаемые лоты",
+            reply_markup=main_reply_keyboard(),
+        )
+    elif refresh:
+        try:
+            await event.answer("Обновляю…")
+        except TelegramBadRequest:
+            pass
+        if event.message is not None:
             try:
-                await event.answer("Обновляю…")
+                await event.message.edit_text("Обновляю отслеживаемые лоты…")
             except TelegramBadRequest:
                 pass
-            if event.message is not None:
-                try:
-                    await event.message.edit_text("Обновляю отслеживаемые лоты…")
-                except TelegramBadRequest:
-                    pass
-        else:
-            wait_msg = await event.answer(
-                "Обновляю отслеживаемые лоты…",
-                reply_markup=main_reply_keyboard(),
-            )
     async with SessionLocal() as session:
         user = await get_or_create_user(session, _chat_id(event))
         user_id = user.id

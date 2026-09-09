@@ -264,3 +264,58 @@ def test_finished_search_status() -> None:
     assert is_finished_status("archived")
     assert not is_finished_status("active")
     assert not is_finished_status("live")
+
+
+LOT_HTML = Path(__file__).parent / "fixtures" / "lot_page.html"
+
+
+def test_parse_lot_html_reads_bid_and_auction() -> None:
+    from app.parser import parse_lot_html
+
+    url = "https://bid.cars/en/lot/1-52519866/2020-BMW-5-Series-WBAJR3C09LWW79076"
+    lot = parse_lot_html(LOT_HTML.read_text(encoding="utf-8"), url, lot_id="1-52519866")
+    assert lot is not None
+    assert lot.lot_external_id == "1-52519866"
+    assert lot.current_bid == "$550"
+    assert lot.final_bid is None
+    assert lot.vin == "WBAJR3C09LWW79076"
+    assert lot.title.startswith("2020 BMW 5 Series")
+    assert lot.time_left == "1 д 19 ч 55 мин 12 сек"
+    assert lot.auction_raw == "2026-09-11 20:00:00"
+    assert lot.auction_at is not None
+    assert lot.auction_at.year == 2026
+    assert lot.auction_at.month == 9
+    assert lot.auction_at.day == 11
+    assert lot.auction_at.hour == 20
+    assert lot.auction_at.utcoffset().total_seconds() == 2 * 3600
+    assert lot.search_status == "active"
+
+
+def test_parse_lot_html_sold_uses_final_bid() -> None:
+    from app.parser import is_lot_finished, parse_lot_html
+
+    html = """
+    <html><head><title>2020 BMW 5 Series | BidCars</title></head>
+    <body>
+    <script>
+      var currentBid = 0;
+      var finalBid = 2100;
+      var lotNumber = '1-52519866';
+      var liveAuctionStartDateTime = '2026-09-11 20:00:00';
+    </script>
+    </body></html>
+    """
+    lot = parse_lot_html(html, "https://bid.cars/en/lot/1-52519866/bmw", "1-52519866")
+    assert lot is not None
+    assert lot.final_bid == "$2100"
+    assert lot.current_bid == "$2100"
+    assert lot.search_status == "sold"
+    assert is_lot_finished(lot)
+    assert lot.time_left is None
+
+
+def test_parse_lot_html_rejects_search_page() -> None:
+    from app.parser import parse_lot_html
+
+    html = "<html><body>Active lots search results</body></html>"
+    assert parse_lot_html(html, "https://bid.cars/en/search/results", "1-52519866") is None

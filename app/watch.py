@@ -115,7 +115,14 @@ def watch_changes(row: WatchedLot, lot: LotData) -> list[str]:
         else:
             changes.append(f"🏁 Статус: {escape(lot.status)}")
     if _norm(lot.auction_raw) and _norm(row.auction_raw) != _norm(lot.auction_raw):
-        changes.append(f"🕒 Аукцион: {escape(lot.auction_raw)}")
+        previous = as_utc(getattr(row, "auction_at", None))
+        incoming = as_utc(lot.auction_at)
+        if (
+            previous is None
+            or incoming is None
+            or abs((previous - incoming).total_seconds()) > 1800
+        ):
+            changes.append(f"🕒 Аукцион: {escape(lot.auction_raw)}")
     return changes
 
 
@@ -124,9 +131,12 @@ def apply_lot_to_watch(row: WatchedLot, lot: LotData) -> None:
     row.lot_url = lot.url or row.lot_url
     if lot.vin:
         row.vin = lot.vin
-    row.last_bid = lot.current_bid
-    row.last_search_status = lot.search_status
-    row.last_status = lot.status
+    if lot.current_bid:
+        row.last_bid = lot.current_bid
+    if lot.search_status:
+        row.last_search_status = lot.search_status
+    if lot.status:
+        row.last_status = lot.status
     if lot.auction_at is not None:
         previous = as_utc(row.auction_at)
         if (

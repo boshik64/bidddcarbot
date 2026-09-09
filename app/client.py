@@ -14,7 +14,10 @@ from app.parser import (
     LotFetch,
     extract_lang,
     filter_url_to_api_url,
-    lot_lookup_url,
+    is_lot_finished,
+    looks_like_lot_html,
+    lot_page_url,
+    parse_lot_html,
     parse_search_json,
     validate_filter_url,
 )
@@ -88,6 +91,7 @@ class BidCarsClient:
         if response.status_code != 200:
             raise ParseError(f"Прогрев сессии: HTTP {response.status_code}")
         self._warmed = True
+        return response.text or ""
 
     async def _raw_get(self, url: str, referer: str) -> Any:
         await rate_limiter.wait()
@@ -132,6 +136,50 @@ class BidCarsClient:
             raise ParseError("Неожиданный формат JSON")
         return payload
 
+    async def _raw_get_html(self, url: str) -> Any:
+        await rate_limiter.wait()
+        session = await self._session_get()
+        try:
+            return await session.get(
+                url,
+                headers={
+                    "User-Agent": settings.user_agent,
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Accept-Language": "en-US,en;q=0.9,ru;q=0.8",
+                },
+                timeout=settings.request_timeout_seconds,
+                allow_redirects=True,
+            )
+        except Exception as exc:
+            await self.close()
+            raise ParseError(f"Сеть: {type(exc).__name__}: {exc}") from exc
+
+    async def _get_html(self, url: str) -> str:
+        if not self._warmed:
+            html = await self._warmup(url)
+            if looks_like_lot_html(html):
+                return html
+        response = await self._raw_get_html(url)
+        text = response.text or ""
+        if response.status_code == 404:
+            return ""
+        if response.status_code != 200:
+            raise ParseError(f"HTTP {response.status_code} от bid.cars")
+        if looks_like_lot_html(text):
+            return text
+        logger.info("Lot page returned unexpected HTML, re-warming session")
+        await self.close()
+        html = await self._warmup(url)
+        if looks_like_lot_html(html):
+            return html
+        response = await self._raw_get_html(url)
+        text = response.text or ""
+        if response.status_code == 404:
+            return ""
+        if response.status_code != 200:
+            raise ParseError(f"HTTP {response.status_code} от bid.cars")
+        return text
+
     async def _search_first_page(self, url: str) -> list[LotData]:
         filter_url = validate_filter_url(url)
         api_url = filter_url_to_api_url(filter_url, page=1)
@@ -154,36 +202,19 @@ class BidCarsClient:
         lot_url: str | None = None,
         include_archived: bool = True,
     ) -> LotFetch:
+        # include_archived is kept for callers; the lot page already covers sold lots.
         lang = lang or extract_lang(lot_url or "https://bid.cars/en/")
-        queries: list[tuple[str, str]] = []
-        if vin:
-            queries.append((lot_lookup_url(lang, vin=vin, archived=False), "active"))
-        queries.append((lot_lookup_url(lang, query=lot_id, archived=False), "active"))
-        if include_archived:
-            if vin:
-                queries.append((lot_lookup_url(lang, vin=vin, archived=True), "archived"))
-            queries.append((lot_lookup_url(lang, query=lot_id, archived=True), "archived"))
-
-        seen: set[str] = set()
-        errors: list[str] = []
-        tried = 0
-        for url, source in queries:
-            if url in seen:
-                continue
-            seen.add(url)
-            try:
-                lots = await self._search_first_page(url)
-            except ParseError as exc:
-                logger.warning("Lot lookup failed %s: %s", url, exc)
-                errors.append(str(exc))
-                continue
-            tried += 1
-            match = self._pick_lot(lots, lot_id)
-            if match is not None:
-                return LotFetch(lot=match, source=source)
-        if errors and tried == 0:
-            raise ParseError(errors[-1])
-        return LotFetch(lot=None, source="missing")
+        page_url = lot_url or (
+            lot_page_url(lot_id, vin, lang=lang)
+            if vin
+            else f"https://bid.cars/{lang}/lot/{lot_id}"
+        )
+        html = await self._get_html(page_url)
+        lot = parse_lot_html(html, page_url, lot_id=lot_id)
+        if lot is None:
+            return LotFetch(lot=None, source="missing")
+        source = "archived" if is_lot_finished(lot) else "active"
+        return LotFetch(lot=lot, source=source)
 
     async def parse_filter_with_total(self, url: str) -> tuple[list[LotData], int]:
         filter_url = validate_filter_url(url)

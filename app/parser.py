@@ -197,6 +197,45 @@ def lot_page_url(lot: str, tag: str | None, lang: str = "en") -> str:
     return f"https://bid.cars/{lang}/lot/{lot}/{slug}"
 
 
+_LOT_PATH_ID_RE = re.compile(r"/lot/([^/]+)")
+_JS_CURRENT_BID_RE = re.compile(r"var\s+currentBid\s*=\s*([0-9]+(?:\.[0-9]+)?)\s*;")
+_JS_FINAL_BID_RE = re.compile(r"var\s+finalBid\s*=\s*([0-9]+(?:\.[0-9]+)?)\s*;")
+_JS_LOT_NUMBER_RE = re.compile(r"var\s+lotNumber\s*=\s*'([^']+)'")
+_JS_VIN_RE = re.compile(r"var\s+vin\s*=\s*'([A-HJ-NPR-Z0-9]{17})'", re.I)
+_JS_AUCTION_DT_RE = re.compile(r"var\s+liveAuctionStartDateTime\s*=\s*'([^']*)'")
+_TIME_LEFT_RE = re.compile(r"""id=["']time-left["'][^>]*>([^<]*)<""", re.I)
+_PRICE_SPAN_RE = re.compile(
+    r"""class=["'][^"']*current_bid[^"']*["'][^>]*>\s*(\$[\d\s,]+)""",
+    re.I,
+)
+_TITLE_RE = re.compile(r"<title>([^<]+)</title>", re.I)
+_VIN_TEXT_RE = re.compile(r"\b([A-HJ-NPR-Z0-9]{17})\b")
+
+
+def looks_like_lot_html(html: str) -> bool:
+    if not html:
+        return False
+    return bool(
+        _JS_LOT_NUMBER_RE.search(html)
+        or _JS_CURRENT_BID_RE.search(html)
+        or _TIME_LEFT_RE.search(html)
+        or "currentBid" in html
+    )
+
+
+def parse_lot_datetime(value: str) -> datetime | None:
+    text = value.strip()
+    if not text:
+        return None
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+        try:
+            parsed = datetime.strptime(text, fmt)
+            return parsed.replace(tzinfo=timezone(timedelta(hours=2)))
+        except ValueError:
+            continue
+    return parse_auction_time(text)
+
+
 def lot_lookup_url(
     lang: str,
     *,
@@ -638,3 +677,97 @@ def parse_search_json(payload: dict[str, Any], source_url: str) -> tuple[list[Lo
         seen.add(lot.lot_external_id)
         lots.append(lot)
     return lots, meta
+
+
+def parse_lot_html(
+    html: str,
+    lot_url: str,
+    lot_id: str | None = None,
+) -> LotData | None:
+    if not html or not looks_like_lot_html(html):
+        return None
+    found_id = None
+    match = _JS_LOT_NUMBER_RE.search(html)
+    if match:
+        found_id = match.group(1).strip()
+    if not found_id:
+        match = _LOT_PATH_ID_RE.search(lot_url or "")
+        if match:
+            found_id = match.group(1)
+    found_id = found_id or lot_id
+    if not found_id:
+        return None
+    if lot_id and found_id != lot_id:
+        return None
+
+    current_bid = None
+    match = _JS_CURRENT_BID_RE.search(html)
+    if match:
+        amount = float(match.group(1))
+        if amount > 0:
+            current_bid = _format_price(amount)
+    if not current_bid:
+        match = _PRICE_SPAN_RE.search(html)
+        if match:
+            current_bid = match.group(1).replace(" ", "")
+
+    final_bid = None
+    match = _JS_FINAL_BID_RE.search(html)
+    if match:
+        amount = float(match.group(1))
+        if amount > 0:
+            final_bid = _format_price(amount)
+
+    time_left = None
+    match = _TIME_LEFT_RE.search(html)
+    if match:
+        raw_left = match.group(1).strip()
+        lowered = raw_left.lower()
+        if raw_left and lowered not in {"0", "---", "-", "0 sec", "0 сек"}:
+            if any(token in lowered for token in ("ended", "заверш", "sold", "продан")):
+                time_left = None
+            else:
+                time_left = localize_time_left(raw_left)
+
+    auction_raw = None
+    auction_at = None
+    match = _JS_AUCTION_DT_RE.search(html)
+    if match and match.group(1).strip():
+        auction_raw = match.group(1).strip()
+        auction_at = parse_lot_datetime(auction_raw)
+
+    title = found_id
+    match = _TITLE_RE.search(html)
+    if match:
+        raw_title = " ".join(match.group(1).split())
+        raw_title = raw_title.split("|")[0].strip()
+        if raw_title:
+            title = raw_title
+
+    vin = None
+    match = _JS_VIN_RE.search(html)
+    if match:
+        vin = match.group(1).upper()
+    if not vin:
+        match = _VIN_TEXT_RE.search(lot_url or "")
+        if match:
+            vin = match.group(1).upper()
+    if not vin and title:
+        match = _VIN_TEXT_RE.search(title)
+        if match:
+            vin = match.group(1).upper()
+
+    search_status = "sold" if final_bid and not time_left else "active"
+
+    return LotData(
+        lot_external_id=found_id,
+        title=title,
+        url=lot_url,
+        vin=vin,
+        current_bid=current_bid or final_bid,
+        final_bid=final_bid,
+        search_status=search_status,
+        auction_at=auction_at,
+        auction_raw=auction_raw,
+        time_left=time_left,
+    )
