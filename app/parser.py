@@ -315,6 +315,78 @@ def _format_price(value: Any) -> str | None:
     return _clean_text(value)
 
 
+def _clean_time_text(value: Any) -> str | None:
+    if value in (None, "", 0, 0.0, "0", "0.0", "---"):
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return None
+    return _clean_text(value)
+
+
+def _pick_lang_text(value: Any, lang: str) -> str | None:
+    if not isinstance(value, dict):
+        return _clean_time_text(value)
+    for key in (lang, "en", "ru"):
+        text = _clean_time_text(value.get(key))
+        if text:
+            return text
+    for item in value.values():
+        text = _clean_time_text(item)
+        if text:
+            return text
+    return None
+
+
+def format_time_left(seconds: int) -> str:
+    if seconds < 0:
+        seconds = 0
+    days, rem = divmod(seconds, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes, secs = divmod(rem, 60)
+    parts: list[str] = []
+    if days:
+        parts.append(f"{days} д")
+    if hours:
+        parts.append(f"{hours} ч")
+    if minutes:
+        parts.append(f"{minutes} мин")
+    if secs and not days:
+        parts.append(f"{secs} сек")
+    return " ".join(parts) or "меньше минуты"
+
+
+def localize_time_left(text: str) -> str:
+    text = text.strip()
+    text = re.sub(r"\bseconds?\b", "сек", text, flags=re.I)
+    text = re.sub(r"\bsecs?\b", "сек", text, flags=re.I)
+    text = re.sub(r"\bminutes?\b", "мин", text, flags=re.I)
+    text = re.sub(r"\bmins?\b", "мин", text, flags=re.I)
+    text = re.sub(r"\bhours?\b", "ч", text, flags=re.I)
+    text = re.sub(r"\bhrs?\b", "ч", text, flags=re.I)
+    text = re.sub(r"\bdays?\b", "д", text, flags=re.I)
+    text = re.sub(r"(\d+)\s*d\b", r"\1 д", text, flags=re.I)
+    text = re.sub(r"(\d+)\s*h\b", r"\1 ч", text, flags=re.I)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def parse_time_left_seconds(item: dict[str, Any]) -> int | None:
+    for key in ("time_left_seconds", "time_left"):
+        value = item.get(key)
+        if isinstance(value, bool) or value in (None, ""):
+            continue
+        if isinstance(value, (int, float)):
+            seconds = int(value)
+            if 0 < seconds < 1_000_000_000:
+                return seconds
+        if isinstance(value, str) and value.strip().isdigit():
+            seconds = int(value.strip())
+            if 0 < seconds < 1_000_000_000:
+                return seconds
+    return None
+
+
 def parse_auction_time(value: Any, *, now: datetime | None = None) -> datetime | None:
     if value is None or value == "":
         return None
@@ -368,19 +440,40 @@ def parse_auction_time(value: Any, *, now: datetime | None = None) -> datetime |
     return parsed
 
 
-def _auction_raw(item: dict[str, Any]) -> str | None:
-    for key in (
-        "prebid_close_time",
-        "bid_close_time",
-        "buy_now_close_time",
-        "auction_date",
-        "sale_date",
-        "sale_time",
-    ):
-        value = _clean_text(item.get(key))
-        if value:
-            return value
-    return None
+def _auction_fields(
+    item: dict[str, Any], lang: str
+) -> tuple[str | None, datetime | None]:
+    lang_map = item.get("prebid_close_time_lang") or item.get("bid_close_time_lang")
+    en_raw = _pick_lang_text(lang_map, "en") if isinstance(lang_map, dict) else None
+    display = _pick_lang_text(lang_map, lang) if isinstance(lang_map, dict) else None
+    if not display:
+        for key in (
+            "prebid_close_time",
+            "bid_close_time",
+            "buy_now_close_time",
+            "auction_date",
+            "sale_date",
+            "sale_time",
+        ):
+            display = _clean_time_text(item.get(key))
+            if display:
+                break
+    parsed = parse_auction_time(en_raw or display)
+    return display, parsed
+
+
+def _time_left_text(item: dict[str, Any]) -> tuple[str | None, int | None]:
+    seconds = parse_time_left_seconds(item)
+    formatted = _clean_text(item.get("time_left_formatted"))
+    if not formatted:
+        raw = item.get("time_left")
+        if isinstance(raw, str):
+            formatted = _clean_text(raw)
+    if formatted:
+        formatted = localize_time_left(formatted)
+    elif seconds:
+        formatted = format_time_left(seconds)
+    return formatted, seconds
 
 
 def normalize_search_status(value: str | None) -> str:
@@ -445,10 +538,10 @@ def lot_from_item(item: dict[str, Any], lang: str = "en") -> LotData | None:
     miles, km = parse_odometer(item)
     prebid = _format_price(item.get("prebid_price"))
     buy_now = _format_price(item.get("buy_now_price"))
-    auction_raw = _auction_raw(item)
-    time_left = _clean_text(item.get("time_left_formatted")) or _clean_text(
-        item.get("time_left")
-    )
+    auction_raw, auction_at = _auction_fields(item, lang=lang)
+    time_left, seconds = _time_left_text(item)
+    if auction_at is None and seconds:
+        auction_at = datetime.now(timezone.utc) + timedelta(seconds=seconds)
     return LotData(
         lot_external_id=lot_id,
         title=title,
@@ -467,7 +560,7 @@ def lot_from_item(item: dict[str, Any], lang: str = "en") -> LotData | None:
         odometer_miles=miles,
         odometer_km=km,
         search_status=_clean_text(item.get("search_status")),
-        auction_at=parse_auction_time(auction_raw),
+        auction_at=auction_at,
         auction_raw=auction_raw,
         time_left=time_left,
         raw=item,

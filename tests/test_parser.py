@@ -131,11 +131,11 @@ def test_parse_fixture_lots() -> None:
     assert first.odometer_miles == 32431
     assert first.odometer_km == 52193
     assert first.url.startswith("https://bid.cars/ru/lot/0-45732519/")
-    assert first.auction_raw == "Tue 21 Apr, 13:00 GMT+2"
+    assert first.auction_raw == "вт 21 апр., 13:00 GMT+2"
     assert first.auction_at is not None
     assert first.auction_at.month == 4
     assert first.auction_at.day == 21
-    assert first.time_left == "12d 4h"
+    assert first.time_left == "12 д 4 ч"
 
     second = lots[1]
     assert second.status == "Не на ходу"
@@ -210,6 +210,50 @@ def test_parse_auction_time_bidcars_format() -> None:
     assert parsed.day == 21
     assert parsed.hour == 13
     assert parsed.utcoffset().total_seconds() == 2 * 3600
+
+
+def test_ignores_zero_buy_now_close_time() -> None:
+    lot = lot_from_item(
+        {
+            "lot": "1-52519866",
+            "name": "2020 BMW 5 Series",
+            "buy_now_close_time": 0,
+            "prebid_close_time_lang": {
+                "en": "Fri 11 Sep, 20:00 GMT+2",
+                "ru": "пт 11 сент., 20:00 GMT+2",
+            },
+            "time_left": 159053,
+            "time_left_formatted": "1 d 20 h 10 min",
+            "prebid_price": "$550",
+            "search_status": "active",
+        },
+        lang="ru",
+    )
+    assert lot is not None
+    assert lot.auction_raw == "пт 11 сент., 20:00 GMT+2"
+    assert lot.auction_raw != "0"
+    assert lot.time_left == "1 д 20 ч 10 мин"
+    assert lot.auction_at is not None
+    assert lot.auction_at.month == 9
+    assert lot.auction_at.day == 11
+    assert lot.auction_at.hour == 20
+
+
+def test_time_left_from_seconds_when_formatted_missing() -> None:
+    from app.parser import format_time_left
+
+    assert format_time_left(159053) == "1 д 20 ч 10 мин"
+    lot = lot_from_item(
+        {
+            "lot": "0-1",
+            "name": "Test",
+            "buy_now_close_time": 0,
+            "time_left": 90,
+        }
+    )
+    assert lot is not None
+    assert lot.auction_raw is None
+    assert lot.time_left == "1 мин 30 сек"
 
 
 def test_finished_search_status() -> None:

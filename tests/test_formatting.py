@@ -34,8 +34,12 @@ def test_lot_caption_contains_core_fields() -> None:
     assert "Houston (TX)" in text
     assert "Открыть лот" in text
     lot.auction_raw = "Tue 21 Apr, 13:00 GMT+2"
-    assert "Аукцион" in lot_caption(lot)
-    assert "Tue 21 Apr" in lot_caption(lot)
+    lot.time_left = "1 д 20 ч 10 мин"
+    caption = lot_caption(lot)
+    assert "Аукцион" in caption
+    assert "Tue 21 Apr" in caption
+    assert "Осталось" in caption
+    assert "1 д 20 ч" in caption
 
 
 def test_filter_card_text() -> None:

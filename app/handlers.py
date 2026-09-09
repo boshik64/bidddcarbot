@@ -621,7 +621,7 @@ async def show_watch_list(event: Event, state: FSMContext, page: int = 0) -> Non
     await _send(
         event,
         watch_list_text(items, page=page, page_size=WATCH_PAGE_SIZE, total=total),
-        watched_list_keyboard(markup_items, page=page, total=total) if total else None,
+        watched_list_keyboard(markup_items, page=page, total=total),
     )
 
 
@@ -924,6 +924,11 @@ async def cb_filters(callback: CallbackQuery, state: FSMContext) -> None:
 @router.callback_query(F.data == "nav:add")
 async def cb_add(callback: CallbackQuery, state: FSMContext) -> None:
     await prompt_add_filter(callback, state)
+
+
+@router.callback_query(F.data == "nav:watch")
+async def cb_watch(callback: CallbackQuery, state: FSMContext) -> None:
+    await show_watch_list(callback, state)
 
 
 @router.callback_query(F.data == "nav:status")

@@ -12,7 +12,7 @@ from app.parser import button_label
 
 BTN_FILTERS = "📋 Мои фильтры"
 BTN_ADD = "➕ Добавить"
-BTN_WATCH = "❤️ Отслеживание"
+BTN_WATCH = "❤️ Отслеживаемые"
 BTN_STATUS = "📊 Статус"
 BTN_INTERVAL = "⏱ Интервал"
 BTN_SUB = "💎 Подписка"
@@ -34,8 +34,8 @@ WATCH_PAGE_SIZE = 8
 def main_reply_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text=BTN_FILTERS), KeyboardButton(text=BTN_ADD)],
-            [KeyboardButton(text=BTN_WATCH), KeyboardButton(text=BTN_STATUS)],
+            [KeyboardButton(text=BTN_FILTERS), KeyboardButton(text=BTN_WATCH)],
+            [KeyboardButton(text=BTN_ADD), KeyboardButton(text=BTN_STATUS)],
             [KeyboardButton(text=BTN_INTERVAL), KeyboardButton(text=BTN_SUB)],
         ],
         resize_keyboard=True,
@@ -56,6 +56,11 @@ def filters_keyboard(filters: list[Filter]) -> InlineKeyboardMarkup:
         )
     rows.append(
         [
+            InlineKeyboardButton(text="❤️ Отслеживаемые", callback_data="nav:watch"),
+        ]
+    )
+    rows.append(
+        [
             InlineKeyboardButton(text="➕ Добавить", callback_data="nav:add"),
             InlineKeyboardButton(text="📊 Статус", callback_data="nav:status"),
         ]
@@ -66,7 +71,8 @@ def filters_keyboard(filters: list[Filter]) -> InlineKeyboardMarkup:
 def empty_filters_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="➕ Добавить фильтр", callback_data="nav:add")]
+            [InlineKeyboardButton(text="➕ Добавить фильтр", callback_data="nav:add")],
+            [InlineKeyboardButton(text="❤️ Отслеживаемые", callback_data="nav:watch")],
         ]
     )
 
@@ -237,6 +243,9 @@ def watched_list_keyboard(
         nav.append(InlineKeyboardButton(text="➡️", callback_data=f"wch:p:{page + 1}"))
     if nav:
         rows.append(nav)
+    rows.append(
+        [InlineKeyboardButton(text="⬅️ К фильтрам", callback_data="nav:filters")]
+    )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

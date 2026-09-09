@@ -13,8 +13,13 @@
       "location": "Hartford (CT)",
       "prebid_price": "$400",
       "buy_now_price": null,
-      "prebid_close_time": "Tue 21 Apr, 13:00 GMT+2",
-      "time_left": "12d 4h",
+      "buy_now_close_time": 0,
+      "prebid_close_time_lang": {
+        "en": "Tue 21 Apr, 13:00 GMT+2",
+        "ru": "вт 21 апр., 13:00 GMT+2"
+      },
+      "time_left": 1056000,
+      "time_left_formatted": "12 d 4 h",
       "final_bid": null,
       "odometer": 32431,
       "search_status": "active",

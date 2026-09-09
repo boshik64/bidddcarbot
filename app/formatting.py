@@ -24,8 +24,8 @@ def lot_caption(lot: LotData) -> str:
         lines.append(f"📍 Локация: {escape(lot.location)}")
     if lot.auction_raw:
         lines.append(f"🕒 Аукцион: {escape(lot.auction_raw)}")
-    elif lot.time_left:
-        lines.append(f"⏳ До аукциона: {escape(lot.time_left)}")
+    if lot.time_left:
+        lines.append(f"⏳ Осталось: {escape(lot.time_left)}")
     if lot.vin:
         lines.append(f"🔢 VIN: <code>{escape(lot.vin)}</code>")
     lines.append(f'🔗 <a href="{escape(lot.url, quote=True)}">Открыть лот</a>')
@@ -38,7 +38,7 @@ HELP_TEXT = (
     "Управление — кнопками внизу экрана и карточками фильтров:\n"
     "📋 <b>Мои фильтры</b> — список, внутри текущие лоты, пауза и удаление\n"
     "➕ <b>Добавить</b> — прислать ссылку на поиск\n"
-    "❤️ <b>Отслеживание</b> — лоты с сердечком: цена, продажа, напоминания\n"
+    "❤️ <b>Отслеживаемые</b> — лоты с сердечком: цена, продажа, напоминания\n"
     "📊 <b>Статус</b> — сколько фильтров и лотов\n"
     "⏱ <b>Интервал</b> — как часто проверять\n"
     "💎 <b>Подписка</b> — оплата USDT TRC20\n\n"
@@ -129,6 +129,10 @@ def lots_page_text(
         mileage = format_mileage(lot.odometer_miles, lot.odometer_km)
         if mileage:
             bits.append(f"📏 {escape(mileage)}")
+        if lot.time_left:
+            bits.append(f"⏳ {escape(lot.time_left)}")
+        elif lot.auction_raw:
+            bits.append(f"🕒 {escape(_clip(lot.auction_raw, 40))}")
         if lot.location:
             bits.append(f"📍 {escape(_clip(lot.location, 40))}")
         if lot.status:
