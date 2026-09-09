@@ -418,7 +418,7 @@ def _lot_preview(lot: LotData) -> dict[str, Any]:
         "odometer_miles": lot.odometer_miles,
         "odometer_km": lot.odometer_km,
         "photo_url": lot.photo_url,
-        "photo_urls": list(lot.photo_urls or [])[:10],
+        "photo_urls": list(lot.photo_urls or []),
     }
 
 

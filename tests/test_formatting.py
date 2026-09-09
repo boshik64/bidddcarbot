@@ -110,7 +110,15 @@ def test_album_never_exceeds_telegram_limit() -> None:
     assert len(album) == TG_ALBUM_MAX
     assert album[0].endswith("-1.jpg")
     slideshow = album_photo_urls(lot)
-    assert len(slideshow) == TG_SLIDESHOW_MAX
+    assert len(slideshow) == 20
+
+    crowded = LotData(
+        lot_external_id="2",
+        title="Car",
+        url="https://bid.cars/en/lot/2/car",
+        photo_urls=[f"https://pluto.bid.car/y-{i}.jpg" for i in range(TG_SLIDESHOW_MAX + 5)],
+    )
+    assert len(album_photo_urls(crowded)) == TG_SLIDESHOW_MAX
 
 
 def test_lot_article_html_wraps_photos_in_slideshow() -> None:
