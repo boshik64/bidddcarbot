@@ -23,17 +23,12 @@ logger = logging.getLogger(__name__)
 _poll_lock = asyncio.Lock()
 
 
-def _interval_for(filt: Filter) -> int:
-    minutes = filt.interval_minutes or settings.effective_poll_interval
-    return max(minutes, settings.min_poll_interval_minutes)
-
-
 def _is_due(filt: Filter) -> bool:
     last = as_utc(filt.last_checked_at)
     if last is None:
         return True
     delta = utcnow() - last
-    return delta >= timedelta(minutes=_interval_for(filt))
+    return delta >= timedelta(minutes=settings.poll_interval_minutes)
 
 
 async def _send_lot(bot: Bot, chat_id: int, lot: LotData, user_id: int) -> None:

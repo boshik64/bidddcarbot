@@ -40,7 +40,6 @@ HELP_TEXT = (
     "➕ <b>Добавить</b> — прислать ссылку на поиск\n"
     "❤️ <b>Отслеживаемые</b> — лоты с сердечком: цена, продажа, напоминания\n"
     "📊 <b>Статус</b> — сколько фильтров и лотов\n"
-    "⏱ <b>Интервал</b> — как часто проверять\n"
     "💎 <b>Подписка</b> — оплата USDT TRC20\n\n"
     "На карточке лота или в текущих лотах нажми ❤️ — буду присылать "
     "изменение ставки, напомню за 24 и 2 часа до аукциона и отпишу, когда лот продадут.\n\n"
@@ -65,7 +64,6 @@ def filter_card_text(
     *,
     is_paused: bool,
     last_checked: str,
-    interval_minutes: int,
     lots_count: int,
     active_lots: int | None = None,
     last_error: str | None = None,
@@ -79,7 +77,6 @@ def filter_card_text(
         f"🚗 {escape(title)}",
         f"📌 {status}",
         f"🕒 Последняя проверка: {escape(last_checked)}",
-        f"⏱ Интервал: {interval_minutes} мин",
         f"📦 Лотов в памяти: {lots_count}",
         f"🚗 Активных лотов: {active}",
         f'🔗 <a href="{escape(url, quote=True)}">Страница фильтра</a>',

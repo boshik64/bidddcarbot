@@ -138,13 +138,6 @@ def apply_lot_to_watch(row: WatchedLot, lot: LotData) -> None:
     if lot.status:
         row.last_status = lot.status
     if lot.auction_at is not None:
-        previous = as_utc(row.auction_at)
-        if (
-            previous is not None
-            and abs((previous - lot.auction_at).total_seconds()) > 1800
-        ):
-            row.reminded_24h = False
-            row.reminded_2h = False
         row.auction_at = lot.auction_at
     if lot.auction_raw:
         row.auction_raw = lot.auction_raw
@@ -335,7 +328,7 @@ def _watch_due(row: WatchedLot) -> bool:
     last = as_utc(row.last_checked_at)
     if last is None:
         return True
-    return utcnow() - last >= timedelta(minutes=settings.effective_poll_interval)
+    return utcnow() - last >= timedelta(minutes=settings.poll_interval_minutes)
 
 
 async def watch_markup_for(user_id: int, lot_id: str):
@@ -426,6 +419,7 @@ async def _process_watch_result(
             return
 
         changes = watch_changes(row, lot)
+        apply_lot_to_watch(row, lot)
         kind = reminder_due(
             lot.auction_at or row.auction_at,
             reminded_24h=row.reminded_24h,
@@ -436,7 +430,6 @@ async def _process_watch_result(
             row.reminded_24h = True
         elif kind == "24h":
             row.reminded_24h = True
-        apply_lot_to_watch(row, lot)
         await session.commit()
 
     if changes:

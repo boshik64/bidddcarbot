@@ -10,7 +10,6 @@ class Settings(BaseSettings):
 
     bot_token: str = ""
     poll_interval_minutes: int = 10
-    min_poll_interval_minutes: int = 5
     max_filters_per_user: int = 10
     max_watched_per_user: int = 30
     request_delay_seconds: float = 3.0
@@ -33,10 +32,6 @@ class Settings(BaseSettings):
     god_mode_password: str = "defaultpass"
     trongrid_api_key: str = ""
     trongrid_base_url: str = "https://api.trongrid.io"
-
-    @property
-    def effective_poll_interval(self) -> int:
-        return max(self.poll_interval_minutes, self.min_poll_interval_minutes)
 
 
 settings = Settings()

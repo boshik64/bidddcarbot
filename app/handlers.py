@@ -53,7 +53,6 @@ from app.keyboards import (
     empty_filters_keyboard,
     filter_card_keyboard,
     filters_keyboard,
-    interval_keyboard,
     is_watch_button,
     LOTS_PAGE_SIZE,
     invoice_keyboard,
@@ -225,13 +224,6 @@ async def _lots_count(session: AsyncSession, filter_id: int) -> int:
         select(func.count()).select_from(SeenLot).where(SeenLot.filter_id == filter_id)
     )
     return int(result.scalar_one())
-
-
-def _interval_of(filt: Filter) -> int:
-    return max(
-        filt.interval_minutes or settings.effective_poll_interval,
-        settings.min_poll_interval_minutes,
-    )
 
 
 def _invoice_text(plan: str) -> str:
@@ -425,7 +417,6 @@ async def show_filter_card(event: Event, filter_id: int, *, edit: bool = True) -
             filt.url,
             is_paused=filt.is_paused,
             last_checked=_fmt_dt(filt.last_checked_at),
-            interval_minutes=_interval_of(filt),
             lots_count=lots_count,
             active_lots=filt.last_active_count,
             last_error=filt.last_error,
@@ -599,8 +590,7 @@ async def show_status(event: Event) -> None:
         f"Последняя проверка: {_fmt_dt(last_check)}\n"
         f"Всего запомненных лотов: {lots_count}\n"
         f"Отслеживаю лотов: {watch_count}\n"
-        f"Интервал: {settings.effective_poll_interval} мин "
-        f"(минимум {settings.min_poll_interval_minutes})."
+        f"Проверка каждые {settings.poll_interval_minutes} мин."
     )
     await _send(event, text, back_to_filters_keyboard())
 
@@ -677,23 +667,15 @@ async def show_watch_list(
 
 
 async def show_interval(event: Event) -> None:
-    if not await require_access(event):
-        return
-    async with SessionLocal() as session:
-        user = await get_or_create_user(session, _chat_id(event))
-        result = await session.execute(
-            select(Filter.interval_minutes).where(Filter.user_id == user.id)
-        )
-        values = [row[0] for row in result.all()]
-        await session.commit()
-    current = next((v for v in values if v), None) or settings.effective_poll_interval
-    current = max(current, settings.min_poll_interval_minutes)
-    await _send(
-        event,
-        f"Как часто проверять фильтры?\nСейчас: <b>{current} мин</b>.\n"
-        f"Чаще {settings.min_poll_interval_minutes} мин нельзя.",
-        interval_keyboard(current, settings.min_poll_interval_minutes),
+    text = (
+        f"Проверка фильтров и отслеживаемых — каждые "
+        f"<b>{settings.poll_interval_minutes} мин</b>. "
+        "Выбрать другой интервал нельзя."
     )
+    if isinstance(event, Message):
+        await event.answer(text, reply_markup=main_reply_keyboard())
+        return
+    await _send(event, text, back_to_filters_keyboard())
 
 
 async def prompt_add_filter(event: Event, state: FSMContext) -> None:
@@ -759,7 +741,6 @@ async def add_filter_from_url(message: Message, url: str) -> None:
             user_id=user.id,
             url=canonical,
             label=label_from_url(canonical),
-            interval_minutes=settings.effective_poll_interval,
         )
         session.add(filt)
         await session.flush()
@@ -780,7 +761,6 @@ async def add_filter_from_url(message: Message, url: str) -> None:
             filt.url,
             is_paused=False,
             last_checked=_fmt_dt(filt.last_checked_at),
-            interval_minutes=_interval_of(filt),
             lots_count=len(lots),
             active_lots=active_total,
             label=filt.label,
@@ -860,15 +840,6 @@ async def cmd_watch(message: Message, state: FSMContext) -> None:
 @router.message(Command("set_interval"))
 async def cmd_set_interval(message: Message, command: CommandObject, state: FSMContext) -> None:
     await state.clear()
-    raw = (command.args or "").strip()
-    if raw:
-        try:
-            minutes = int(raw.split()[0])
-        except ValueError:
-            await show_interval(message)
-            return
-        await _apply_interval(message, minutes)
-        return
     await show_interval(message)
 
 
@@ -1024,11 +995,13 @@ async def cb_pay_ok(callback: CallbackQuery, state: FSMContext) -> None:
 async def cb_interval(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     try:
-        minutes = int((callback.data or "").split(":")[1])
-    except (IndexError, ValueError):
-        await callback.answer("Некорректный интервал", show_alert=True)
-        return
-    await _apply_interval(callback, minutes)
+        await callback.answer(
+            f"Интервал фиксированный: {settings.poll_interval_minutes} мин",
+            show_alert=True,
+        )
+    except TelegramBadRequest:
+        pass
+    await show_interval(callback)
 
 
 @router.callback_query(F.data.startswith("flt:"))
@@ -1216,40 +1189,3 @@ async def cb_watch_actions(callback: CallbackQuery, state: FSMContext) -> None:
             return
         await session.commit()
     await _refresh_after_watch(callback, state, lot_id, True)
-
-
-async def _apply_interval(event: Event, minutes: int) -> None:
-    if not await require_access(event):
-        return
-    if minutes < settings.min_poll_interval_minutes:
-        if isinstance(event, CallbackQuery):
-            await event.answer(
-                f"Минимум {settings.min_poll_interval_minutes} мин",
-                show_alert=True,
-            )
-            return
-        await event.answer(
-            f"Слишком часто. Минимум {settings.min_poll_interval_minutes} минут."
-        )
-        return
-    if minutes > 24 * 60:
-        if isinstance(event, CallbackQuery):
-            await event.answer("Максимум сутки", show_alert=True)
-            return
-        await event.answer("Максимум 1440 минут (сутки).")
-        return
-
-    async with SessionLocal() as session:
-        user = await get_or_create_user(session, _chat_id(event))
-        result = await session.execute(select(Filter).where(Filter.user_id == user.id))
-        filters = list(result.scalars().all())
-        for filt in filters:
-            filt.interval_minutes = minutes
-        await session.commit()
-
-    extra = "" if filters else " Когда появятся фильтры, будут проверяться с этим интервалом."
-    await _send(
-        event,
-        f"Интервал проверки: <b>{minutes} мин</b>.{extra}",
-        back_to_filters_keyboard(),
-    )

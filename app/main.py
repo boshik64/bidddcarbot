@@ -28,7 +28,6 @@ async def _set_commands(bot: Bot) -> None:
             BotCommand(command="add_filter", description="Добавить фильтр"),
             BotCommand(command="watch", description="Отслеживаемые лоты"),
             BotCommand(command="status", description="Статистика"),
-            BotCommand(command="set_interval", description="Интервал проверки"),
             BotCommand(command="help", description="Справка"),
         ]
     )
@@ -71,7 +70,7 @@ async def main() -> None:
     scheduler.start()
     logger.info(
         "Scheduler started, default interval %s min, request delay %ss",
-        settings.effective_poll_interval,
+        settings.poll_interval_minutes,
         settings.request_delay_seconds,
     )
 

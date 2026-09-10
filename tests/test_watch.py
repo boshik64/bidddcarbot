@@ -20,6 +20,42 @@ def test_reminder_due_windows() -> None:
     assert remaining_from_auction(now - timedelta(minutes=1), now=now) == "идёт аукцион"
 
 
+def test_apply_lot_keeps_reminder_flags() -> None:
+    from app.watch import apply_lot_to_watch
+
+    stored = datetime(2026, 9, 11, 20, 0)
+    live = datetime(2026, 9, 11, 20, 0, tzinfo=timezone(timedelta(hours=2)))
+    row = SimpleNamespace(
+        title="BMW",
+        lot_url="https://bid.cars/en/lot/1-1/bmw",
+        vin=None,
+        last_bid="$550",
+        last_search_status="active",
+        last_status=None,
+        auction_at=stored,
+        auction_raw="пт 11 сент., 20:00 GMT+2",
+        raw_data=None,
+        reminded_24h=True,
+        reminded_2h=False,
+        last_checked_at=None,
+        consecutive_misses=0,
+    )
+    apply_lot_to_watch(
+        row,
+        LotData(
+            lot_external_id="1-1",
+            title="BMW",
+            url="https://bid.cars/en/lot/1-1/bmw",
+            current_bid="$575",
+            auction_at=live,
+            auction_raw="2026-09-11 20:00:00",
+        ),
+    )
+    assert row.reminded_24h is True
+    assert row.reminded_2h is False
+    assert row.last_bid == "$575"
+
+
 def test_watch_changes_price_and_auction() -> None:
     row = SimpleNamespace(
         last_bid="$400",

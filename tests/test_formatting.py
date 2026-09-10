@@ -53,7 +53,6 @@ def test_filter_card_text() -> None:
         "https://bid.cars/ru/search/results?make=BMW&model=5+Series&year-from=2018&year-to=2020",
         is_paused=True,
         last_checked="03.09.2026 08:51",
-        interval_minutes=10,
         lots_count=87,
     )
     assert "#12" in text

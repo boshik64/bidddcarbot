@@ -16,7 +16,7 @@ BTN_FILTERS = "📋 Мои фильтры"
 BTN_ADD = "➕ Добавить"
 BTN_WATCH = "❤️ Отслеживаемые"
 BTN_STATUS = "📊 Статус"
-BTN_INTERVAL = "⏱ Интервал"
+BTN_INTERVAL = "⏱ Интервал"  # старая кнопка, в меню больше нет
 BTN_SUB = "💎 Подписка"
 
 WATCH_BUTTON_RE = re.compile(r"(?i)^\W*отслежива")
@@ -51,7 +51,6 @@ def is_watch_button(text: str | None) -> bool:
         return True
     return bool(WATCH_BUTTON_RE.match(text.replace("\ufe0f", "")))
 
-INTERVAL_PRESETS = (5, 10, 15, 30, 60, 120)
 LOTS_PAGE_SIZE = 10
 WATCH_PAGE_SIZE = 8
 
@@ -61,7 +60,7 @@ def main_reply_keyboard() -> ReplyKeyboardMarkup:
         keyboard=[
             [KeyboardButton(text=BTN_FILTERS), KeyboardButton(text=BTN_WATCH)],
             [KeyboardButton(text=BTN_ADD), KeyboardButton(text=BTN_STATUS)],
-            [KeyboardButton(text=BTN_INTERVAL), KeyboardButton(text=BTN_SUB)],
+            [KeyboardButton(text=BTN_SUB)],
         ],
         resize_keyboard=True,
         is_persistent=True,
@@ -130,25 +129,6 @@ def confirm_delete_keyboard(filter_id: int) -> InlineKeyboardMarkup:
             ]
         ]
     )
-
-
-def interval_keyboard(current: int, min_minutes: int) -> InlineKeyboardMarkup:
-    buttons: list[InlineKeyboardButton] = []
-    for minutes in INTERVAL_PRESETS:
-        if minutes < min_minutes:
-            continue
-        mark = " · сейчас" if minutes == current else ""
-        buttons.append(
-            InlineKeyboardButton(
-                text=f"{minutes} мин{mark}",
-                callback_data=f"int:{minutes}",
-            )
-        )
-    rows: list[list[InlineKeyboardButton]] = []
-    for i in range(0, len(buttons), 3):
-        rows.append(buttons[i : i + 3])
-    rows.append([InlineKeyboardButton(text="⬅️ К фильтрам", callback_data="nav:filters")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def add_filter_keyboard() -> InlineKeyboardMarkup:
