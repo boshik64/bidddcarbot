@@ -14,11 +14,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.access import has_access
-from app.client import ParseError, fetch_lot
+from app.client import ParseError, fetch_lot, find_active_lot_by_vin
 from app.config import settings
 from app.db import SessionLocal
 from app.formatting import (
     watch_missing_text,
+    watch_relist_text,
     watch_reminder_text,
     watch_sale_text,
     watch_update_text,
@@ -31,6 +32,7 @@ from app.parser import (
     LotFetch,
     extract_lang,
     format_time_left,
+    is_finished_status,
     is_lot_finished,
     lot_from_item,
     lot_from_preview,
@@ -88,6 +90,8 @@ def remaining_from_auction(auction_at, *, now=None) -> str | None:
 
 
 def remaining_from_watch(row: WatchedLot) -> str | None:
+    if is_finished_status(row.last_search_status):
+        return "аукцион завершён"
     text = remaining_from_auction(row.auction_at)
     if text:
         return text
@@ -96,6 +100,80 @@ def remaining_from_watch(row: WatchedLot) -> str | None:
         if parsed is not None:
             return remaining_from_auction(parsed.auction_at) or parsed.time_left
     return None
+
+
+def apply_watch_snapshot(lot: LotData, row: WatchedLot) -> LotData:
+    """Показывает карточку с актуальными полями из отслеживания."""
+    if row.last_bid:
+        lot.current_bid = row.last_bid
+    if row.last_status:
+        lot.status = row.last_status
+    if row.last_search_status:
+        lot.search_status = row.last_search_status
+    if row.auction_at is not None:
+        lot.auction_at = as_utc(row.auction_at)
+    if row.auction_raw:
+        lot.auction_raw = row.auction_raw
+    remaining = remaining_from_watch(row)
+    if remaining:
+        lot.time_left = remaining
+    if row.title:
+        lot.title = row.title
+    if row.vin:
+        lot.vin = row.vin
+    if row.lot_url:
+        lot.url = row.lot_url
+    return lot
+
+
+def sync_watch_from_listing(row: WatchedLot, lot: LotData) -> bool:
+    """Подтягивает ставку/аукцион из свежей выдачи фильтра в отслеживание."""
+    changed = False
+    if lot.current_bid and _norm(lot.current_bid) != _norm(row.last_bid):
+        row.last_bid = lot.current_bid
+        changed = True
+    if lot.status and _norm(lot.status) != _norm(row.last_status):
+        row.last_status = lot.status
+        changed = True
+    if lot.search_status and _norm(lot.search_status) != _norm(row.last_search_status):
+        if not is_finished_status(row.last_search_status) or not is_lot_finished(lot):
+            row.last_search_status = lot.search_status
+            changed = True
+    if lot.auction_at is not None:
+        previous = as_utc(row.auction_at)
+        if previous is None or abs((previous - lot.auction_at).total_seconds()) > 60:
+            row.auction_at = lot.auction_at
+            changed = True
+    if lot.auction_raw and _norm(lot.auction_raw) != _norm(row.auction_raw):
+        row.auction_raw = lot.auction_raw
+        changed = True
+    if lot.title and lot.title != row.title:
+        row.title = lot.title
+        changed = True
+    if lot.vin and lot.vin != row.vin:
+        row.vin = lot.vin
+        changed = True
+    if lot.url and lot.lot_external_id == row.lot_external_id:
+        row.lot_url = lot.url
+    if lot.raw:
+        row.raw_data = lot.raw
+        changed = True
+    return changed
+
+
+def is_relisted(row: WatchedLot, lot: LotData) -> bool:
+    if is_lot_finished(lot):
+        return False
+    if is_finished_status(row.last_search_status):
+        return True
+    if lot.lot_external_id and lot.lot_external_id != row.lot_external_id:
+        return True
+    previous = as_utc(row.auction_at)
+    incoming = as_utc(lot.auction_at)
+    if previous is None or incoming is None:
+        return False
+    now = utcnow()
+    return incoming > previous + timedelta(hours=6) and previous < now and incoming > now
 
 
 def watch_changes(row: WatchedLot, lot: LotData) -> list[str]:
@@ -148,22 +226,22 @@ def apply_lot_to_watch(row: WatchedLot, lot: LotData) -> None:
 
 
 def lot_from_watch(row: WatchedLot) -> LotData:
+    lot = None
     if isinstance(row.raw_data, dict) and row.raw_data:
-        parsed = lot_from_item(row.raw_data, lang=extract_lang(row.lot_url or ""))
-        if parsed is not None:
-            remember_lot(parsed)
-            return parsed
-    lot = LotData(
-        lot_external_id=row.lot_external_id,
-        title=row.title,
-        url=row.lot_url,
-        vin=row.vin,
-        current_bid=row.last_bid,
-        status=row.last_status,
-        search_status=row.last_search_status,
-        auction_at=as_utc(row.auction_at),
-        auction_raw=row.auction_raw,
-    )
+        lot = lot_from_item(row.raw_data, lang=extract_lang(row.lot_url or ""))
+    if lot is None:
+        lot = LotData(
+            lot_external_id=row.lot_external_id,
+            title=row.title,
+            url=row.lot_url,
+            vin=row.vin,
+            current_bid=row.last_bid,
+            status=row.last_status,
+            search_status=row.last_search_status,
+            auction_at=as_utc(row.auction_at),
+            auction_raw=row.auction_raw,
+        )
+    apply_watch_snapshot(lot, row)
     remember_lot(lot)
     return lot
 
@@ -215,6 +293,24 @@ async def list_watched(session: AsyncSession, user_id: int) -> list[WatchedLot]:
     return list(result.scalars().all())
 
 
+async def _fetch_watch_snapshot(
+    lot_id: str, *, vin: str | None, lot_url: str | None
+) -> LotFetch:
+    fetched = await fetch_lot(lot_id, vin=vin, lot_url=lot_url)
+    finished = fetched.lot is None or is_lot_finished(fetched.lot, source=fetched.source)
+    if finished and vin:
+        try:
+            alt = await find_active_lot_by_vin(
+                vin, lang=extract_lang(lot_url or "https://bid.cars/en/")
+            )
+        except ParseError as exc:
+            logger.warning("VIN relist lookup failed for %s: %s", vin, exc)
+            alt = None
+        if alt is not None and not is_lot_finished(alt):
+            return LotFetch(lot=alt, source="active")
+    return fetched
+
+
 async def refresh_user_watched(user_id: int) -> tuple[list[WatchedLot], list[str]]:
     async with SessionLocal() as session:
         rows = await list_watched(session, user_id)
@@ -224,12 +320,7 @@ async def refresh_user_watched(user_id: int) -> tuple[list[WatchedLot], list[str
     removed: list[str] = []
     for watch_id, lot_id, vin, lot_url in specs:
         try:
-            fetched = await fetch_lot(
-                lot_id,
-                vin=vin,
-                lot_url=lot_url,
-                include_archived=False,
-            )
+            fetched = await _fetch_watch_snapshot(lot_id, vin=vin, lot_url=lot_url)
         except ParseError as exc:
             logger.warning("Watch list refresh failed for %s: %s", lot_id, exc)
             continue
@@ -242,11 +333,12 @@ async def refresh_user_watched(user_id: int) -> tuple[list[WatchedLot], list[str
                 await session.commit()
                 continue
             remember_lot(fetched.lot)
-            if is_lot_finished(fetched.lot, source=fetched.source):
-                removed.append(row.title or lot_id)
-                await session.delete(row)
-                await session.commit()
-                continue
+            relist = is_relisted(row, fetched.lot)
+            if fetched.lot.lot_external_id != row.lot_external_id:
+                row = await _adopt_lot(session, row, fetched.lot)
+            if relist:
+                row.reminded_24h = False
+                row.reminded_2h = False
             apply_lot_to_watch(row, fetched.lot)
             await session.commit()
     async with SessionLocal() as session:
@@ -379,6 +471,20 @@ async def _mark_errors(watch_ids: list[int]) -> None:
         await session.commit()
 
 
+async def _adopt_lot(session: AsyncSession, row: WatchedLot, lot: LotData) -> WatchedLot:
+    if lot.lot_external_id == row.lot_external_id:
+        return row
+    other = await get_watched(session, row.user_id, lot.lot_external_id)
+    if other is not None and other.id != row.id:
+        apply_lot_to_watch(other, lot)
+        other.reminded_24h = False
+        other.reminded_2h = False
+        await session.delete(row)
+        return other
+    row.lot_external_id = lot.lot_external_id
+    return row
+
+
 async def _process_watch_result(
     bot: Bot, watch_id: int, fetched: LotFetch
 ) -> None:
@@ -392,30 +498,66 @@ async def _process_watch_result(
         if fetched.lot is None:
             row.consecutive_misses += 1
             row.last_checked_at = utcnow()
-            if row.consecutive_misses < WATCH_MISS_LIMIT:
-                await session.commit()
-                return
-            title, url = row.title, row.lot_url
-            chat_id = row.user.telegram_chat_id
-            await _send_notice(bot, chat_id, watch_missing_text(title, url))
-            await session.delete(row)
+            if (
+                row.consecutive_misses >= WATCH_MISS_LIMIT
+                and not is_finished_status(row.last_search_status)
+            ):
+                row.last_search_status = "ended"
             await session.commit()
             return
 
         lot = fetched.lot
         remember_lot(lot)
         chat_id = row.user.telegram_chat_id
-        if is_lot_finished(lot, source=fetched.source):
-            price = lot.final_bid or lot.current_bid
-            text = watch_sale_text(
-                lot.title or row.title,
-                lot.url or row.lot_url,
-                price=price,
-                search_status=lot.search_status,
-            )
-            await _send_notice(bot, chat_id, text, lot)
-            await session.delete(row)
+        previously_finished = is_finished_status(row.last_search_status)
+        now_finished = is_lot_finished(lot, source=fetched.source)
+        relist = not now_finished and is_relisted(row, lot)
+        sale_notice = now_finished and not previously_finished
+
+        if lot.lot_external_id != row.lot_external_id:
+            row = await _adopt_lot(session, row, lot)
+            if row.id != watch_id:
+                await session.commit()
+                relist = not now_finished
+            chat_id = row.user.telegram_chat_id if row.user else chat_id
+
+        if now_finished:
+            apply_lot_to_watch(row, lot)
             await session.commit()
+            if sale_notice:
+                price = lot.final_bid or lot.current_bid
+                await _send_notice(
+                    bot,
+                    chat_id,
+                    watch_sale_text(
+                        lot.title or row.title,
+                        lot.url or row.lot_url,
+                        price=price,
+                        search_status=lot.search_status,
+                    ),
+                    lot,
+                    watched=True,
+                )
+            return
+
+        if relist:
+            row.reminded_24h = False
+            row.reminded_2h = False
+            apply_lot_to_watch(row, lot)
+            await session.commit()
+            await _send_notice(
+                bot,
+                chat_id,
+                watch_relist_text(
+                    lot.title or row.title,
+                    lot.url or row.lot_url,
+                    bid=lot.current_bid,
+                    auction_raw=lot.auction_raw,
+                    time_left=lot.time_left,
+                ),
+                lot,
+                watched=True,
+            )
             return
 
         changes = watch_changes(row, lot)
@@ -489,7 +631,7 @@ async def poll_watched_lots(bot: Bot) -> None:
             vin = next((row.vin for row in group if row.vin), None)
             lot_url = next((row.lot_url for row in group if row.lot_url), None)
             try:
-                fetched = await fetch_lot(lot_id, vin=vin, lot_url=lot_url)
+                fetched = await _fetch_watch_snapshot(lot_id, vin=vin, lot_url=lot_url)
             except ParseError as exc:
                 logger.warning("Watch fetch failed for %s: %s", lot_id, exc)
                 await _mark_errors([row.id for row in group])
@@ -508,6 +650,28 @@ async def send_watched_lot_photos(bot: Bot, chat_id: int, user_id: int, lot_id: 
         row = await get_watched(session, user_id, lot_id)
         if row is None:
             return
+        watch_id = row.id
+        vin = row.vin
+        lot_url = row.lot_url
         lot = lot_from_watch(row)
-        markup = lot_watch_keyboard(lot_id, True)
+        await session.commit()
+    try:
+        fetched = await _fetch_watch_snapshot(lot_id, vin=vin, lot_url=lot_url)
+    except ParseError as exc:
+        logger.warning("Watch photo refresh failed for %s: %s", lot_id, exc)
+        fetched = None
+    if fetched is not None and fetched.lot is not None:
+        async with SessionLocal() as session:
+            row = await session.get(WatchedLot, watch_id)
+            if row is not None:
+                if fetched.lot.lot_external_id != row.lot_external_id:
+                    row = await _adopt_lot(session, row, fetched.lot)
+                apply_lot_to_watch(row, fetched.lot)
+                await session.commit()
+                lot = lot_from_watch(row)
+                lot_id = row.lot_external_id
+            else:
+                remember_lot(fetched.lot)
+                lot = fetched.lot
+    markup = lot_watch_keyboard(lot_id, True)
     await send_lot_album(bot, chat_id, lot, reply_markup=markup)

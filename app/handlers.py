@@ -66,15 +66,19 @@ from app.models import Filter, Payment, SeenLot, User, as_utc, utcnow
 from app.parser import (
     FilterUrlError,
     LotData,
+    extract_bidcars_url,
     filter_title,
     label_from_url,
     lot_from_preview,
     lot_to_preview,
+    parse_lot_url,
     validate_filter_url,
 )
 from app.watch import (
     WatchLimitError,
     add_watch,
+    apply_watch_snapshot,
+    get_watched,
     is_watched,
     list_watched,
     remaining_from_watch,
@@ -82,6 +86,7 @@ from app.watch import (
     remove_watch,
     resolve_lot,
     send_watched_lot_photos,
+    sync_watch_from_listing,
     watched_count,
     watched_ids_for,
 )
@@ -488,18 +493,31 @@ async def show_filter_lots(
                 await session.commit()
 
     lots = [lot_from_preview(item) for item in cached]
-    for lot in lots:
-        remember_lot(lot)
+    async with SessionLocal() as session:
+        user = await get_or_create_user(session, _chat_id(event))
+        watched_rows = await list_watched(session, user.id)
+        watched = {row.lot_external_id for row in watched_rows}
+        by_id = {row.lot_external_id: row for row in watched_rows}
+        by_vin = {(row.vin or "").upper(): row for row in watched_rows if row.vin}
+        for lot in lots:
+            row = by_id.get(lot.lot_external_id)
+            if row is None and lot.vin:
+                row = by_vin.get(lot.vin.upper())
+            if row is None:
+                remember_lot(lot)
+                continue
+            sync_watch_from_listing(row, lot)
+            apply_watch_snapshot(lot, row)
+            watched.add(row.lot_external_id)
+            watched.add(lot.lot_external_id)
+            remember_lot(lot)
+        await session.commit()
     total = len(lots)
     pages = max(1, (total + LOTS_PAGE_SIZE - 1) // LOTS_PAGE_SIZE) if total else 1
     page = max(0, min(page, pages - 1))
     await state.update_data(browse_page=page)
     start = page * LOTS_PAGE_SIZE
     page_lots = lots[start : start + LOTS_PAGE_SIZE]
-    async with SessionLocal() as session:
-        user = await get_or_create_user(session, _chat_id(event))
-        watched = await watched_ids_for(session, user.id)
-        await session.commit()
     await _send(
         event,
         lots_page_text(
@@ -533,11 +551,21 @@ async def send_filter_lot_photos(event: Event, state: FSMContext, filter_id: int
             await event.answer("Лот не найден", show_alert=True)
         return
     lot = lot_from_preview(cached[index])
-    remember_lot(lot)
     async with SessionLocal() as session:
         user = await get_or_create_user(session, _chat_id(event))
-        watched = await is_watched(session, user.id, lot.lot_external_id)
+        watched_row = await get_watched(session, user.id, lot.lot_external_id)
+        if watched_row is None and lot.vin:
+            vin = lot.vin.upper()
+            for item in await list_watched(session, user.id):
+                if (item.vin or "").upper() == vin:
+                    watched_row = item
+                    break
+        if watched_row is not None:
+            sync_watch_from_listing(watched_row, lot)
+            apply_watch_snapshot(lot, watched_row)
+        watched = watched_row is not None
         await session.commit()
+    remember_lot(lot)
     markup = lot_watch_keyboard(lot.lot_external_id, watched)
     if isinstance(event, CallbackQuery):
         try:
@@ -684,11 +712,58 @@ async def prompt_add_filter(event: Event, state: FSMContext) -> None:
     await state.set_state(AddFilterStates.waiting_url)
     await _send(
         event,
-        "Пришли ссылку на страницу поиска bid.cars "
-        "(из адресной строки после фильтра).",
+        "Пришли ссылку на поиск bid.cars (из адресной строки после фильтра).\n"
+        "Ссылку на конкретный лот тоже можно — сразу подпишу на него.",
         add_filter_keyboard(),
         edit=isinstance(event, CallbackQuery),
     )
+
+
+async def watch_from_lot_url(message: Message, url: str) -> None:
+    if not await require_access(message):
+        return
+    parsed = parse_lot_url(url)
+    if parsed is None:
+        await message.answer(
+            "Не похоже на ссылку лота bid.cars.",
+            reply_markup=main_reply_keyboard(),
+        )
+        return
+    wait_msg = await message.answer("Открываю лот, подписываю…")
+    try:
+        fetched = await fetch_lot(parsed.lot_id, lot_url=parsed.url)
+    except ParseError as exc:
+        logger.warning("Watch-from-url failed for %s: %s", parsed.url, exc)
+        await wait_msg.edit_text(f"Не смог открыть лот: {escape(str(exc))}")
+        return
+    lot = fetched.lot
+    if lot is None:
+        await wait_msg.edit_text("Не нашёл этот лот на bid.cars.")
+        return
+    remember_lot(lot)
+    async with SessionLocal() as session:
+        user = await get_or_create_user(session, message.chat.id)
+        try:
+            created = await add_watch(session, user.id, lot)
+        except WatchLimitError as exc:
+            await session.commit()
+            await wait_msg.edit_text(str(exc))
+            return
+        await session.commit()
+    markup = lot_watch_keyboard(lot.lot_external_id, True)
+    try:
+        await wait_msg.delete()
+    except TelegramBadRequest:
+        pass
+    await send_lot_album(message.bot, message.chat.id, lot, reply_markup=markup)
+    if created:
+        text = (
+            "❤️ Подписал на лот. Напишу про ставку, напомню за 24 и 2 часа "
+            "и если его снова выставят на аукцион."
+        )
+    else:
+        text = "❤️ Этот лот уже в отслеживаемых. Обновил данные."
+    await message.answer(text, reply_markup=main_reply_keyboard())
 
 
 async def add_filter_from_url(message: Message, url: str) -> None:
@@ -927,12 +1002,20 @@ async def cmd_legacy_manage(message: Message, state: FSMContext) -> None:
 async def got_filter_url(message: Message, state: FSMContext) -> None:
     text = (message.text or "").strip()
     await state.clear()
-    await add_filter_from_url(message, text)
+    url = extract_bidcars_url(text) or text
+    if parse_lot_url(url):
+        await watch_from_lot_url(message, url)
+        return
+    await add_filter_from_url(message, url)
 
 
 @router.message(StateFilter(None), F.text.regexp(r"https?://(?:www\.)?bid\.cars/", flags=0))
 async def pasted_url(message: Message) -> None:
-    await add_filter_from_url(message, message.text or "")
+    url = extract_bidcars_url(message.text or "") or (message.text or "")
+    if parse_lot_url(url):
+        await watch_from_lot_url(message, url)
+        return
+    await add_filter_from_url(message, url)
 
 
 # --- Callbacks -----------------------------------------------------------------

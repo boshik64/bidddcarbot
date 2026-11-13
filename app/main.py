@@ -6,6 +6,7 @@ import logging
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramNetworkError
 from aiogram.types import BotCommand
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
@@ -21,16 +22,30 @@ logger = logging.getLogger(__name__)
 
 
 async def _set_commands(bot: Bot) -> None:
-    await bot.set_my_commands(
-        [
-            BotCommand(command="start", description="Меню и кнопки"),
-            BotCommand(command="list_filters", description="Мои фильтры"),
-            BotCommand(command="add_filter", description="Добавить фильтр"),
-            BotCommand(command="watch", description="Отслеживаемые лоты"),
-            BotCommand(command="status", description="Статистика"),
-            BotCommand(command="help", description="Справка"),
-        ]
-    )
+    commands = [
+        BotCommand(command="start", description="Меню и кнопки"),
+        BotCommand(command="list_filters", description="Мои фильтры"),
+        BotCommand(command="add_filter", description="Добавить фильтр"),
+        BotCommand(command="watch", description="Отслеживаемые лоты"),
+        BotCommand(command="status", description="Статистика"),
+        BotCommand(command="help", description="Справка"),
+    ]
+    last_error: Exception | None = None
+    for attempt in range(1, 6):
+        try:
+            await bot.set_my_commands(commands)
+            return
+        except TelegramNetworkError as exc:
+            last_error = exc
+            wait_for = min(2 ** attempt, 15)
+            logger.warning(
+                "set_my_commands failed (attempt %s/5), retry in %ss: %s",
+                attempt,
+                wait_for,
+                exc,
+            )
+            await asyncio.sleep(wait_for)
+    logger.error("Could not set bot commands, continue polling: %s", last_error)
 
 
 async def main() -> None:

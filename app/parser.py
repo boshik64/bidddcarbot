@@ -24,6 +24,23 @@ class FilterUrlError(ValueError):
     pass
 
 
+@dataclass
+class ParsedLotUrl:
+    lot_id: str
+    url: str
+    lang: str
+    slug: str | None = None
+
+
+_BIDCARS_URL_RE = re.compile(r"https?://(?:www\.)?bid\.cars[^\s<>]+", re.I)
+_LOT_URL_RE = re.compile(
+    r"^https?://(?:www\.)?bid\.cars"
+    r"(?:/(?P<lang>en|ru|ua|pl))?"
+    r"/lot/(?P<lot>[^/?#]+)(?:/(?P<slug>[^/?#]*))?",
+    re.I,
+)
+
+
 KM_PER_MILE = 1.609344
 TG_ALBUM_MAX = 10
 TG_SLIDESHOW_MAX = 50
@@ -135,6 +152,32 @@ def validate_filter_url(url: str) -> str:
         fragment="",
     )
     return urlunparse(cleaned)
+
+
+def extract_bidcars_url(text: str) -> str | None:
+    match = _BIDCARS_URL_RE.search(text or "")
+    if not match:
+        return None
+    return match.group(0).rstrip(").,]>\"'")
+
+
+def parse_lot_url(url: str) -> ParsedLotUrl | None:
+    raw = (url or "").strip()
+    if raw.startswith("<") and raw.endswith(">"):
+        raw = raw[1:-1].strip()
+    match = _LOT_URL_RE.match(raw)
+    if not match:
+        extracted = extract_bidcars_url(raw)
+        match = _LOT_URL_RE.match(extracted) if extracted else None
+    if not match:
+        return None
+    lot_id = match.group("lot").strip()
+    if not lot_id:
+        return None
+    lang = (match.group("lang") or "en").lower()
+    slug = (match.group("slug") or "").strip() or None
+    canonical = lot_page_url(lot_id, slug, lang=lang) if slug else f"https://bid.cars/{lang}/lot/{lot_id}"
+    return ParsedLotUrl(lot_id=lot_id, url=canonical, lang=lang, slug=slug)
 
 
 def _param_pretty(value: str | None) -> str | None:
@@ -758,16 +801,28 @@ def parse_lot_html(
             vin = match.group(1).upper()
 
     search_status = "sold" if final_bid and not time_left else "active"
+    current = current_bid or final_bid
 
     return LotData(
         lot_external_id=found_id,
         title=title,
         url=lot_url,
         vin=vin,
-        current_bid=current_bid or final_bid,
+        current_bid=current,
         final_bid=final_bid,
         search_status=search_status,
         auction_at=auction_at,
         auction_raw=auction_raw,
         time_left=time_left,
+        raw={
+            "lot": found_id,
+            "vin": vin,
+            "name": title,
+            "prebid_price": current,
+            "final_bid": final_bid,
+            "search_status": search_status,
+            "prebid_close_time": auction_raw,
+            "time_left_formatted": time_left,
+            "source": "lot_html",
+        },
     )

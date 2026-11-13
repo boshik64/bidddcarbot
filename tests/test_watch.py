@@ -2,7 +2,13 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from app.parser import LotData, is_lot_finished, lot_from_preview, lot_to_preview
-from app.watch import remaining_from_auction, reminder_due, watch_changes
+from app.watch import (
+    is_relisted,
+    remaining_from_auction,
+    reminder_due,
+    sync_watch_from_listing,
+    watch_changes,
+)
 
 
 def test_reminder_due_windows() -> None:
@@ -133,3 +139,75 @@ def test_watch_changes_ignores_auction_text_when_time_same() -> None:
         auction_at=when,
     )
     assert watch_changes(row, lot) == []
+
+
+def test_is_relisted_after_sale_and_new_lot_id() -> None:
+    old = datetime(2026, 9, 1, 12, 0, tzinfo=timezone.utc)
+    new = datetime(2026, 11, 20, 18, 0, tzinfo=timezone.utc)
+    finished = SimpleNamespace(
+        last_search_status="sold",
+        lot_external_id="1-1",
+        auction_at=old,
+    )
+    again = LotData(
+        lot_external_id="1-1",
+        title="BMW",
+        url="https://bid.cars/en/lot/1-1/bmw",
+        search_status="active",
+        auction_at=new,
+    )
+    assert is_relisted(finished, again)
+
+    other_id = LotData(
+        lot_external_id="1-2",
+        title="BMW",
+        url="https://bid.cars/en/lot/1-2/bmw",
+        search_status="active",
+        auction_at=new,
+    )
+    active = SimpleNamespace(
+        last_search_status="active",
+        lot_external_id="1-1",
+        auction_at=old,
+    )
+    assert is_relisted(active, other_id)
+    assert not is_relisted(
+        active,
+        LotData(
+            lot_external_id="1-1",
+            title="BMW",
+            url="https://bid.cars/en/lot/1-1/bmw",
+            search_status="active",
+            auction_at=old,
+        ),
+    )
+
+
+def test_sync_watch_from_listing_updates_bid() -> None:
+    row = SimpleNamespace(
+        last_bid="$400",
+        last_status="На ходу",
+        last_search_status="active",
+        auction_at=None,
+        auction_raw=None,
+        title="BMW",
+        vin="WBAJR3C09LWW79076",
+        lot_url="https://bid.cars/en/lot/1-1/bmw",
+        lot_external_id="1-1",
+        raw_data=None,
+    )
+    lot = LotData(
+        lot_external_id="1-1",
+        title="BMW 530",
+        url="https://bid.cars/en/lot/1-1/bmw",
+        current_bid="$625",
+        status="На ходу",
+        search_status="active",
+        auction_raw="Fri 20 Nov, 18:00 GMT+2",
+        auction_at=datetime(2026, 11, 20, 18, 0, tzinfo=timezone(timedelta(hours=2))),
+        vin="WBAJR3C09LWW79076",
+    )
+    assert sync_watch_from_listing(row, lot) is True
+    assert row.last_bid == "$625"
+    assert row.title == "BMW 530"
+    assert row.auction_at is not None

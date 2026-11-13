@@ -195,6 +195,18 @@ def test_watch_messages() -> None:
     )
     assert "продан" in sale.lower()
     assert "$2 100" in sale
+    assert "снова выставят" in sale.lower() or "отслеживаемых" in sale.lower()
+    from app.formatting import watch_relist_text
+
+    relist = watch_relist_text(
+        "BMW",
+        "https://bid.cars/en/lot/0-1/bmw",
+        bid="$400",
+        auction_raw="Fri 20 Nov, 18:00 GMT+2",
+        time_left="1 д 2 ч",
+    )
+    assert "снова на аукционе" in relist.lower()
+    assert "$400" in relist
     listing = watch_list_text(
         [("BMW", "https://bid.cars/en/lot/0-1/bmw", "$400", "Tue 21 Apr", "1 д 20 ч")],
         page=0,

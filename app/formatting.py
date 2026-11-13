@@ -42,9 +42,11 @@ HELP_TEXT = (
     "📊 <b>Статус</b> — сколько фильтров и лотов\n"
     "💎 <b>Подписка</b> — оплата USDT TRC20\n\n"
     "На карточке лота или в текущих лотах нажми ❤️ — буду присылать "
-    "изменение ставки, напомню за 24 и 2 часа до аукциона и отпишу, когда лот продадут.\n\n"
-    "Ссылку на фильтр можно просто вставить в чат, без команды.\n"
-    "Как получить: bid.cars → настрой поиск → скопируй URL из адресной строки."
+    "изменение ставки, напомню за 24 и 2 часа до аукциона. "
+    "Если лот снова выставят — напишу.\n\n"
+    "Ссылку на фильтр или на конкретный лот можно просто вставить в чат: "
+    "фильтр добавится в список, лот — в отслеживаемые.\n"
+    "Как получить фильтр: bid.cars → настрой поиск → скопируй URL из адресной строки."
 )
 
 START_TEXT = (
@@ -192,7 +194,28 @@ def watch_sale_text(
     lines = [headline, f"🚗 {_lot_link(title, url)}"]
     if price:
         lines.append(f"💰 Цена: {escape(price)}")
-    lines.append("Отслеживание снято.")
+    lines.append("Оставлю в отслеживаемых — напишу, если лот снова выставят.")
+    return "\n".join(lines)
+
+
+def watch_relist_text(
+    title: str,
+    url: str,
+    *,
+    bid: str | None = None,
+    auction_raw: str | None = None,
+    time_left: str | None = None,
+) -> str:
+    lines = [
+        "🔁 Лот снова на аукционе",
+        f"🚗 {_lot_link(title, url)}",
+    ]
+    if bid:
+        lines.append(f"💰 Текущая ставка: {escape(bid)}")
+    if auction_raw:
+        lines.append(f"🕒 {escape(auction_raw)}")
+    if time_left:
+        lines.append(f"⏳ Осталось: {escape(time_left)}")
     return "\n".join(lines)
 
 
@@ -216,10 +239,10 @@ def watch_list_text(
     header = (
         "❤️ <b>Отслеживаемые лоты</b>\n"
         f"Страница {page + 1} из {pages} · всего {total}\n"
-        "Цена и время обновляются при открытии списка."
+        "Цена и время — с последней проверки. 🔄 обновит с сайта."
     )
     if not total:
-        return header + "\n\nПока пусто. Нажми ❤️ на карточке лота."
+        return header + "\n\nПока пусто. Нажми ❤️ на карточке или пришли ссылку на лот."
     start = page * page_size
     chunk = items[start : start + page_size]
     blocks: list[str] = []

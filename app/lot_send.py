@@ -35,6 +35,24 @@ class SendRichMessage(TelegramMethod[Message]):
 def remember_lot(lot: LotData) -> None:
     if not lot.lot_external_id:
         return
+    prev = _lot_cache.get(lot.lot_external_id)
+    if prev is not None:
+        if not lot.photo_urls and prev.photo_urls:
+            lot.photo_urls = list(prev.photo_urls)
+            lot.photo_url = lot.photo_url or prev.photo_url
+        elif not lot.photo_url and prev.photo_url:
+            lot.photo_url = prev.photo_url
+        if not lot.damage and prev.damage:
+            lot.damage = prev.damage
+        if not lot.location and prev.location:
+            lot.location = prev.location
+        if lot.odometer_miles is None and prev.odometer_miles is not None:
+            lot.odometer_miles = prev.odometer_miles
+            lot.odometer_km = prev.odometer_km
+        if not lot.status and prev.status:
+            lot.status = prev.status
+        if not lot.vin and prev.vin:
+            lot.vin = prev.vin
     _lot_cache[lot.lot_external_id] = lot
     _lot_cache.move_to_end(lot.lot_external_id)
     while len(_lot_cache) > _LOT_CACHE_MAX:

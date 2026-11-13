@@ -16,6 +16,7 @@ from app.parser import (
     filter_url_to_api_url,
     is_lot_finished,
     looks_like_lot_html,
+    lot_lookup_url,
     lot_page_url,
     parse_lot_html,
     parse_search_json,
@@ -216,6 +217,22 @@ class BidCarsClient:
         source = "archived" if is_lot_finished(lot) else "active"
         return LotFetch(lot=lot, source=source)
 
+    async def find_active_lot_by_vin(
+        self, vin: str, *, lang: str = "en"
+    ) -> LotData | None:
+        vin = (vin or "").strip().upper()
+        if not vin:
+            return None
+        url = lot_lookup_url(lang, vin=vin, archived=False)
+        lots = await self._search_first_page(url)
+        for lot in lots:
+            if (lot.vin or "").upper() != vin:
+                continue
+            if is_lot_finished(lot):
+                continue
+            return lot
+        return None
+
     async def parse_filter_with_total(self, url: str) -> tuple[list[LotData], int]:
         filter_url = validate_filter_url(url)
         collected: list[LotData] = []
@@ -284,6 +301,10 @@ async def fetch_lot(
     )
 
 
+async def find_active_lot_by_vin(vin: str, *, lang: str = "en") -> LotData | None:
+    return await client.find_active_lot_by_vin(vin, lang=lang)
+
+
 __all__ = [
     "ParseError",
     "FilterUrlError",
@@ -292,6 +313,7 @@ __all__ = [
     "parse_filter",
     "parse_filter_with_total",
     "fetch_lot",
+    "find_active_lot_by_vin",
     "client",
     "rate_limiter",
 ]

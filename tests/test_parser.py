@@ -319,3 +319,22 @@ def test_parse_lot_html_rejects_search_page() -> None:
 
     html = "<html><body>Active lots search results</body></html>"
     assert parse_lot_html(html, "https://bid.cars/en/search/results", "1-52519866") is None
+
+
+def test_parse_lot_url_accepts_direct_and_embedded() -> None:
+    from app.parser import parse_lot_url
+
+    direct = parse_lot_url(
+        "https://bid.cars/ru/lot/1-52519866/2020-BMW-5-Series-WBAJR3C09LWW79076"
+    )
+    assert direct is not None
+    assert direct.lot_id == "1-52519866"
+    assert direct.lang == "ru"
+    assert "/ru/lot/1-52519866/" in direct.url
+
+    embedded = parse_lot_url(
+        "Смотри https://www.bid.cars/en/lot/0-45732519/camry?x=1 ещё"
+    )
+    assert embedded is not None
+    assert embedded.lot_id == "0-45732519"
+    assert parse_lot_url("https://bid.cars/en/search/results?make=BMW") is None
