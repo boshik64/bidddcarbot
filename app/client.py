@@ -47,10 +47,31 @@ class RateLimiter:
 
 rate_limiter = RateLimiter(settings.request_delay_seconds)
 
+_NETWORK_HINTS = (
+    "dns",
+    "resolve",
+    "timed out",
+    "timeout",
+    "connection",
+    "connect",
+    "reset",
+    "unreachable",
+    "temporary failure",
+    "could not resolve",
+)
+
 
 def _looks_like_json(text: str) -> bool:
     stripped = text.lstrip()
     return stripped.startswith("{") or stripped.startswith("[")
+
+
+def _is_transient_network_error(exc: BaseException) -> bool:
+    name = type(exc).__name__.lower()
+    text = str(exc).lower()
+    if "dns" in name or "timeout" in name or "connection" in name:
+        return True
+    return any(hint in text for hint in _NETWORK_HINTS)
 
 
 class BidCarsClient:
@@ -70,7 +91,43 @@ class BidCarsClient:
             self._session = None
             self._warmed = False
 
-    async def _warmup(self, referer: str) -> None:
+    async def _with_network_retries(self, label: str, factory):
+        last_exc: Exception | None = None
+        for attempt in range(1, 4):
+            try:
+                return await factory()
+            except ParseError as exc:
+                last_exc = exc
+                if not _is_transient_network_error(exc) or attempt >= 3:
+                    raise
+                wait_for = min(2 ** attempt, 8)
+                logger.warning(
+                    "%s failed (attempt %s/3), retry in %ss: %s",
+                    label,
+                    attempt,
+                    wait_for,
+                    exc,
+                )
+                await self.close()
+                await asyncio.sleep(wait_for)
+            except Exception as exc:
+                last_exc = exc
+                if not _is_transient_network_error(exc) or attempt >= 3:
+                    raise
+                wait_for = min(2 ** attempt, 8)
+                logger.warning(
+                    "%s failed (attempt %s/3), retry in %ss: %s",
+                    label,
+                    attempt,
+                    wait_for,
+                    exc,
+                )
+                await self.close()
+                await asyncio.sleep(wait_for)
+        assert last_exc is not None
+        raise last_exc
+
+    async def _warmup_once(self, referer: str) -> str:
         """Первый HTML-заход ставит Cloudflare/session cookies. API без них отдаёт challenge."""
         logger.info("Warming bid.cars session via %s", referer)
         await rate_limiter.wait()
@@ -94,7 +151,12 @@ class BidCarsClient:
         self._warmed = True
         return response.text or ""
 
-    async def _raw_get(self, url: str, referer: str) -> Any:
+    async def _warmup(self, referer: str) -> str:
+        return await self._with_network_retries(
+            "warmup", lambda: self._warmup_once(referer)
+        )
+
+    async def _raw_get_once(self, url: str, referer: str) -> Any:
         await rate_limiter.wait()
         session = await self._session_get()
         try:
@@ -113,6 +175,11 @@ class BidCarsClient:
         except Exception as exc:
             await self.close()
             raise ParseError(f"Сеть: {type(exc).__name__}: {exc}") from exc
+
+    async def _raw_get(self, url: str, referer: str) -> Any:
+        return await self._with_network_retries(
+            "json GET", lambda: self._raw_get_once(url, referer)
+        )
 
     async def _get_json(self, url: str, referer: str) -> dict[str, Any]:
         if not self._warmed:
@@ -137,7 +204,7 @@ class BidCarsClient:
             raise ParseError("Неожиданный формат JSON")
         return payload
 
-    async def _raw_get_html(self, url: str) -> Any:
+    async def _raw_get_html_once(self, url: str) -> Any:
         await rate_limiter.wait()
         session = await self._session_get()
         try:
@@ -154,6 +221,11 @@ class BidCarsClient:
         except Exception as exc:
             await self.close()
             raise ParseError(f"Сеть: {type(exc).__name__}: {exc}") from exc
+
+    async def _raw_get_html(self, url: str) -> Any:
+        return await self._with_network_retries(
+            "html GET", lambda: self._raw_get_html_once(url)
+        )
 
     async def _get_html(self, url: str) -> str:
         if not self._warmed:

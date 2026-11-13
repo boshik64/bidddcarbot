@@ -61,16 +61,29 @@ python explore.py "https://bid.cars/en/search/results?search-type=filters&status
 - **порты на хост не пробрасываются** (боту они не нужны, Telegram ходит исходящим long poll);
 - своя сеть compose, host-network не используется.
 
-На сервере:
+На сервере (Timeweb / старый `docker-compose` v1):
 
 ```bash
-git clone <этот-репозиторий> /opt/bidcarbot
-cd /opt/bidcarbot
+cd /var/www/bidddcarbot
+git pull
+docker rm -f bidcarbot
+docker-compose -p bidcarbot up -d --build
+docker logs -f --tail 50 bidcarbot
+```
+
+В `docker-compose.yml` уже:
+- формат `version: "3.8"` (без ключа `name:`, который ломает старый compose);
+- DNS Timeweb + `1.1.1.1` (не `8.8.8.8` — у Timeweb он часто недоступен на :53);
+- `extra_hosts` для `bid.cars`, чтобы DNS-глюки не роняли парсер.
+
+Первый раз / новый сервер:
+
+```bash
+git clone <этот-репозиторий> /var/www/bidddcarbot
+cd /var/www/bidddcarbot
 cp .env.example .env
 nano .env   # BOT_TOKEN=...
-
-docker compose up -d --build
-docker compose logs -f
+docker-compose -p bidcarbot up -d --build
 ```
 
 Проверка, что соседние боты на месте:
@@ -79,27 +92,17 @@ docker compose logs -f
 docker ps
 ```
 
-Должны быть и старые контейнеры, и новый `bidcarbot`. Если вдруг поднял не из этой папки — смотри `docker compose ls`.
-
 Данные (SQLite + логи) живут в volume `bidcarbot_data` и переживают пересборку образа. Бэкап:
 
 ```bash
-docker compose cp bidcarbot:/app/data/bidcarbot.db ./bidcarbot.db.bak
-```
-
-Обновление:
-
-```bash
-cd /opt/bidcarbot
-git pull
-docker compose up -d --build
+docker cp bidcarbot:/app/data/bidcarbot.db ./bidcarbot.db.bak
 ```
 
 Остановка только этого бота (остальные не трогает):
 
 ```bash
-cd /opt/bidcarbot
-docker compose down        # volume с БД останется
+cd /var/www/bidddcarbot
+docker-compose -p bidcarbot down        # volume с БД останется
 ```
 
 ## Переменные окружения
