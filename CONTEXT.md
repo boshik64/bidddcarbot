@@ -46,15 +46,15 @@ docker exec bidcarbot cat /etc/hosts
 - Исходящий IP: **`64.188.60.81`** (на eth0 ещё висит `64.188.60.126/32` из `60-extra-ip.yaml` — уточнять в панели Timeweb).
 - DNS хоста через `systemd-resolved` stub `127.0.0.53`; uplink часто **Timeweb** `85.193.93.193` / `85.193.93.194`.
 - **`8.8.8.8:53` с VPS часто timeout** — не ставить только Google DNS.
-- **IPv6 в контейнере опасен:** DNS отдаёт только AAAA → aiohttp/aiogram падают с `ClientConnectorDNSError` / `Request timeout`, при этом scheduler жив и bid.cars иногда ещё отвечает. Пользователь в РФ ни при чём — рвётся путь **контейнер → api.telegram.org**.
-- Симптомы: бот «молчит» 10+ мин; `TelegramNetworkError: Request timeout`; `Cannot connect to host api.telegram.org … Temporary failure in name resolution`; `getent hosts api.telegram.org` → только IPv6.
-- С хоста `curl -I https://api.telegram.org` может быть **ок** (IPv4), а внутри контейнера — нет. Сверять `docker exec … getent` / `cat /etc/hosts`.
+- **IPv6 в контейнере опасен:** DNS/`getent hosts` часто показывают AAAA даже когда в `/etc/hosts` уже есть IPv4-пин → aiohttp сначала лезет в мёртвый IPv6 → `ClientConnectorDNSError` / `Request timeout`. Scheduler при этом жив. Пользователь в РФ ни при чём — рвётся путь **контейнер → api.telegram.org**.
+- Симптомы: бот «молчит» 10+ мин; `TelegramNetworkError: Request timeout`; `Temporary failure in name resolution`; `getent hosts` → только `2001:`/`2606:`, но `cat /etc/hosts` уже с IPv4.
+- С хоста `curl -I https://api.telegram.org` может быть **ок** (IPv4), а внутри контейнера — нет. Сверять `cat /etc/hosts` + логи, не только `getent`.
 - С хоста `curl https://bid.cars` часто **403 Cloudflare challenge**; бот ходит через **`curl_cffi` impersonate=chrome** — нормальный ответ ~`200` и HTML.
-- В compose: DNS Timeweb + `1.1.1.1`, **`extra_hosts`**:
+- В compose: DNS Timeweb + `1.1.1.1`, **`extra_hosts`** (IPv4), **`sysctls` disable IPv6**:
   - `api.telegram.org` → `149.154.166.110` (обновить: `dig +short api.telegram.org A`)
   - `bid.cars` / `www.bid.cars` → `104.18.27.43` (обновить: `dig +short bid.cars A`)
+- В `app/main.py` — `IPv4AiohttpSession` (`family=AF_INET`) + ретраи `set_my_commands` при `TelegramNetworkError`.
 - В `app/client.py` — до **3 ретраев** на DNS/timeout при прогреве и GET.
-- В `app/main.py` — ретраи `set_my_commands` при `TelegramNetworkError`, потом polling всё равно стартует.
 
 Временный костыль для git, если DNS мёртв:
 
@@ -112,7 +112,7 @@ resolvectl flush-caches
 3. Интервал 5 мин не применялся / убран — всегда 10.
 4. Подписка по ссылке на лот + релист + sync инфы между разделами — в `d0aec45`+.
 5. Compose/DNS под Timeweb — `5372961`.
-6. Бот молчит при живом scheduler: DNS/IPv6 → `api.telegram.org`; в compose добавлен IPv4-пин Telegram.
+6. Бот молчит при живом scheduler: DNS предпочитает мёртвый IPv6 → IPv4-пины + `sysctls` disable IPv6 + `IPv4AiohttpSession`.
 
 ## Открытые риски / хвосты
 - После `git pull` с новым `extra_hosts` обязателен **`docker rm -f` + `up -d`**, не `restart`. Локальные правки compose на сервере снова могут блокировать pull.

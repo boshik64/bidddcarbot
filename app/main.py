@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import socket
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramNetworkError
 from aiogram.types import BotCommand
@@ -19,6 +21,14 @@ from app.scheduler import poll_filters
 from app.watch import poll_watched_lots
 
 logger = logging.getLogger(__name__)
+
+
+class IPv4AiohttpSession(AiohttpSession):
+    """На Timeweb DNS/Happy Eyeballs часто сначала лезут в мёртвый IPv6."""
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._connector_init["family"] = socket.AF_INET
 
 
 async def _set_commands(bot: Bot) -> None:
@@ -56,6 +66,7 @@ async def main() -> None:
 
     bot = Bot(
         token=settings.bot_token,
+        session=IPv4AiohttpSession(),
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
     dp = Dispatcher()

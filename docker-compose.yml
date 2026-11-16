@@ -5,8 +5,9 @@
 #   docker-compose -p bidcarbot up -d --build
 #
 # DNS: у Timeweb UDP/53 до 8.8.8.8 часто закрыт — используем их резолверы.
-# extra_hosts: IPv4-пины. На VPS DNS часто отдаёт только AAAA, а IPv6 нестабилен
+# extra_hosts: IPv4-пины. На VPS DNS/getent часто показывает AAAA, а IPv6 мёртв
 # → ClientConnectorDNSError / TelegramNetworkError timeout при «живом» контейнере.
+# sysctls: режем IPv6 в неймспейсе контейнера, чтобы libc/curl брали IPv4 из hosts.
 # IP устарели?  dig +short api.telegram.org A   /   dig +short bid.cars A
 version: "3.8"
 
@@ -24,6 +25,9 @@ services:
       - "api.telegram.org:149.154.166.110"
       - "bid.cars:104.18.27.43"
       - "www.bid.cars:104.18.27.43"
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=1
+      - net.ipv6.conf.default.disable_ipv6=1
     env_file:
       - .env
     environment:
