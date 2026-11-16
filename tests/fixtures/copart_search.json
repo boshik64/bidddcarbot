@@ -1,0 +1,66 @@
+{
+  "returnCode": 1,
+  "returnCodeDesc": "Success",
+  "data": {
+    "query": {
+      "query": ["bmw 530"],
+      "filter": {},
+      "sort": ["auction_date_type desc", "auction_date_utc asc"],
+      "page": 0,
+      "size": 5,
+      "start": 0,
+      "freeFormSearch": true
+    },
+    "results": {
+      "totalElements": 2,
+      "content": [
+        {
+          "ln": 51370776,
+          "lotNumberStr": "51370776",
+          "ld": "2004 BMW Z4 3.0",
+          "mkn": "BMW",
+          "lm": "Z4",
+          "lcy": 2004,
+          "yn": "FL - JACKSONVILLE NORTH",
+          "hb": 275.0,
+          "orr": 120000,
+          "ord": "ACTUAL",
+          "lcd": "RUNS AND DRIVES",
+          "dd": "FRONT END",
+          "ad": 1794852000000,
+          "tims": "https://cs.copart.com/v1/AUTH_svc.pdoc00001/lpp/1126/example_thb.jpg",
+          "lotSold": false,
+          "dynamicLotDetails": {
+            "currentBid": 275,
+            "lotSold": false,
+            "saleStatus": "PURE_SALE",
+            "bidStatus": "NEVER_BID"
+          }
+        },
+        {
+          "ln": 75877886,
+          "lotNumberStr": "75877886",
+          "ld": "2020 BMW 530 XI",
+          "mkn": "BMW",
+          "lm": "530",
+          "lcy": 2020,
+          "yn": "TX - HOUSTON EAST",
+          "hb": 8800.0,
+          "orr": 96537,
+          "ord": "NOT ACTUAL",
+          "lcd": "RUNS AND DRIVES",
+          "dd": "FRONT END",
+          "ad": 1794852000000,
+          "tims": "https://cs.copart.com/v1/AUTH_svc.pdoc00001/lpp/1126/example2_thb.jpg",
+          "lotSold": false,
+          "dynamicLotDetails": {
+            "currentBid": 8800,
+            "lotSold": false,
+            "saleStatus": "PURE_SALE",
+            "bidStatus": "NEVER_BID"
+          }
+        }
+      ]
+    }
+  }
+}

@@ -4,7 +4,8 @@
 
 ## Что это
 
-Telegram-бот на **aiogram 3.22** / Python 3.12 (Docker), SQLite, парсер **bid.cars**.
+Telegram-бот на **aiogram 3.22** / Python 3.12 (Docker), SQLite.
+Источники лотов/фильтров: **bid.cars**, **Copart**, **IAAI** (Insurance Auto Auctions).
 Репозиторий: `https://github.com/boshik64/bidddcarbot.git`
 Прод: `/var/www/bidddcarbot` на Timeweb VPS, бот `@bidddcar_bot`.
 Локально: `/Users/vladislavisenko/Projects/bidcarbot`, venv часто Python 3.9 — не поднимать aiogram выше 3.22 без апгрейда Python; в типах избегать `X | None` в pydantic-моделях на 3.9 (уже `Optional`).
@@ -53,6 +54,9 @@ docker exec bidcarbot cat /etc/hosts
 - В compose: DNS Timeweb + `1.1.1.1`, **`extra_hosts`** (IPv4), **`sysctls` disable IPv6**:
   - `api.telegram.org` → `149.154.166.110` (обновить: `dig +short api.telegram.org A`)
   - `bid.cars` / `www.bid.cars` → `104.18.27.43` (обновить: `dig +short bid.cars A`)
+  - `www.copart.com` → Imperva IPv4 (сейчас `45.60.13.242`; `dig +short www.copart.com A`)
+  - `www.iaai.com` / `vis.iaai.com` → Fastly IPv4 (сейчас `151.101.194.129`)
+  - `cs.copart.com` → Cloudflare IPv4 для фото
 - В `app/main.py` — `IPv4AiohttpSession` (`family=AF_INET`) + ретраи `set_my_commands` при `TelegramNetworkError`.
 - В `app/client.py` — до **3 ретраев** на DNS/timeout при прогреве и GET.
 
@@ -69,18 +73,21 @@ resolvectl flush-caches
 ## Функционал (актуальный)
 
 ### Фильтры
-- Ссылка на поиск bid.cars → снимок лотов → только **новые** карточки.
+- Ссылка на поиск **bid.cars / Copart / IAAI** → снимок лотов → только **новые** карточки.
+- Copart: `lotSearchResults?query=...` → POST `/public/lots/search-results`.
+- IAAI: `Search?Keyword=...` или `Vehiclelisting/...` → HTML-выдача (id/title/дата).
 - Интервал проверки **фиксирован 10 мин** (`POLL_INTERVAL_MINUTES`). Выбор интервала **убран** (кнопка/команда показывают заглушку).
 - Планировщик jobs каждую 1 мин, due по `poll_interval_minutes`.
 
 ### Отслеживаемые (❤️)
-- Подписка с карточки / текущих лотов / **вставкой URL лота** в чат (`parse_lot_url` → `watch_from_lot_url`).
+- Подписка с карточки / текущих лотов / **вставкой URL лота** в чат (`sources.parse_lot_url` → `watch_from_lot_url`).
+- External id: bid.cars как есть (`0-…`/`1-…`); Copart `c-{lot}`; IAAI `i-{itemId}`.
+- Copart лот: GET `/public/data/lotdetails/solr/{lot}`.
+- IAAI лот: HTML `VehicleDetail/{id}~US` → embedded `application/json` (`inventoryView`).
 - Список открывается **сразу из SQLite** (без сети). Свежие данные — опрос раз в 10 мин или **🔄 Обновить**.
-- Парсинг **страницы лота** (HTML/JS: `currentBid`, `finalBid`, `timeLeft`, `liveAuctionStartDateTime`), не активной выдачи поиска.
-- После продажи лот **не снимается**; если снова выставят (тот же ID или новый по **VIN**) — уведомление «🔁 Лот снова на аукционе» (`is_relisted`, `find_active_lot_by_vin`).
-- Напоминания **24ч и 2ч — по одному разу** (`reminded_24h` / `reminded_2h`; не сбрасывать флаги при мелком сдвиге даты аукциона).
+- После продажи лот **не снимается**; если снова выставят (тот же ID или новый по **VIN** на bid.cars) — «🔁 Лот снова на аукционе».
+- Напоминания **24ч и 2ч — по одному разу** (`reminded_24h` / `reminded_2h`).
 - В «Текущие лоты» для watched: `sync_watch_from_listing` + `apply_watch_snapshot`.
-- Фото из отслеживаемых: перед отправкой `_fetch_watch_snapshot` (лот + VIN-fallback).
 
 ### Ключевые файлы
 | Файл | Зачем |
@@ -88,13 +95,16 @@ resolvectl flush-caches
 | `app/main.py` | polling, scheduler, soft set_my_commands |
 | `app/handlers.py` | UI, `watch_from_lot_url`, browse/watch list |
 | `app/watch.py` | poll, relist, reminders, refresh |
-| `app/client.py` | bid.cars HTTP, fetch_lot HTML, retries, VIN search |
-| `app/parser.py` | search JSON + `parse_lot_html` + `parse_lot_url` |
+| `app/client.py` | `AuctionClient`: маршрутизация bid.cars/Copart/IAAI |
+| `app/sources.py` | detect/validate/parse URL всех источников |
+| `app/copart.py` | Copart API lot/search → `LotData` |
+| `app/iaai.py` | IAAI HTML lot/listing → `LotData` |
+| `app/parser.py` | bid.cars search JSON + `parse_lot_html` |
 | `app/models.py` | User, Filter, SeenLot, WatchedLot |
-| `app/formatting.py` | тексты, в т.ч. `watch_relist_text` |
+| `app/formatting.py` | тексты, бейдж источника на карточке |
 | `app/keyboards.py` | reply/inline; BTN_INTERVAL устарела |
-| `docker-compose.yml` | v3.8, DNS Timeweb, extra_hosts (Telegram + bid.cars IPv4) |
-| `tests/` | parser/watch/formatting; `pytest -q` |
+| `docker-compose.yml` | v3.8, DNS Timeweb, extra_hosts (Telegram + bid.cars + Copart/IAAI) |
+| `tests/` | parser/watch/formatting/sources; `pytest -q` |
 
 ### Callback / кнопки
 - `wch:t:{lot_id}` toggle, `wch:ph:`, `wch:p:`, `wch:l` refresh

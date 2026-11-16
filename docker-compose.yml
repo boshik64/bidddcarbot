@@ -9,6 +9,7 @@
 # → ClientConnectorDNSError / TelegramNetworkError timeout при «живом» контейнере.
 # sysctls: режем IPv6 в неймспейсе контейнера, чтобы libc/curl брали IPv4 из hosts.
 # IP устарели?  dig +short api.telegram.org A   /   dig +short bid.cars A
+#   dig +short www.copart.com A   /   dig +short www.iaai.com A
 version: "3.8"
 
 services:
@@ -25,6 +26,12 @@ services:
       - "api.telegram.org:149.154.166.110"
       - "bid.cars:104.18.27.43"
       - "www.bid.cars:104.18.27.43"
+      - "www.copart.com:45.60.13.242"
+      - "copart.com:45.60.13.242"
+      - "www.iaai.com:151.101.194.129"
+      - "iaai.com:151.101.194.129"
+      - "vis.iaai.com:151.101.194.129"
+      - "cs.copart.com:104.20.44.240"
     sysctls:
       - net.ipv6.conf.all.disable_ipv6=1
       - net.ipv6.conf.default.disable_ipv6=1

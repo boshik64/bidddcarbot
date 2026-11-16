@@ -47,7 +47,18 @@ def test_reject_lot_url() -> None:
 
 def test_reject_other_domain() -> None:
     try:
-        validate_filter_url("https://copart.com/search?year=2018")
+        validate_filter_url("https://example.com/search?year=2018")
+        assert False, "should have raised"
+    except FilterUrlError:
+        pass
+
+
+def test_reject_unsupported_copart_path() -> None:
+    # домен Copart поддерживается, но /search без lotSearchResults — нет
+    from app.sources import validate_filter_url as validate_any
+
+    try:
+        validate_any("https://www.copart.com/search?year=2018")
         assert False, "should have raised"
     except FilterUrlError:
         pass

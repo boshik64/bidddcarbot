@@ -10,7 +10,7 @@ from aiogram.types import (
 )
 
 from app.models import Filter
-from app.parser import button_label
+from app.sources import button_label
 
 BTN_FILTERS = "📋 Мои фильтры"
 BTN_ADD = "➕ Добавить"

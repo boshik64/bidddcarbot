@@ -30,6 +30,31 @@ class ParsedLotUrl:
     url: str
     lang: str
     slug: str | None = None
+    source: str = "bidcars"
+
+
+@dataclass
+class LotData:
+    lot_external_id: str
+    title: str
+    url: str
+    vin: str | None = None
+    current_bid: str | None = None
+    buy_now: str | None = None
+    final_bid: str | None = None
+    damage: str | None = None
+    status: str | None = None
+    location: str | None = None
+    photo_url: str | None = None
+    photo_urls: list[str] = field(default_factory=list)
+    odometer_miles: int | None = None
+    odometer_km: int | None = None
+    search_status: str | None = None
+    auction_at: datetime | None = None
+    auction_raw: str | None = None
+    time_left: str | None = None
+    raw: dict[str, Any] = field(default_factory=dict)
+    source: str = "bidcars"
 
 
 _BIDCARS_URL_RE = re.compile(r"https?://(?:www\.)?bid\.cars[^\s<>]+", re.I)
@@ -81,29 +106,6 @@ _AUCTION_TIME_RE = re.compile(
     r"(?:\s*(?:GMT|UTC)\s*(?P<sign>[+-])(?P<offh>\d{1,2})(?::?(?P<offm>\d{2}))?)?",
     re.IGNORECASE,
 )
-
-
-@dataclass
-class LotData:
-    lot_external_id: str
-    title: str
-    url: str
-    vin: str | None = None
-    current_bid: str | None = None
-    buy_now: str | None = None
-    final_bid: str | None = None
-    damage: str | None = None
-    status: str | None = None
-    location: str | None = None
-    photo_url: str | None = None
-    photo_urls: list[str] = field(default_factory=list)
-    odometer_miles: int | None = None
-    odometer_km: int | None = None
-    search_status: str | None = None
-    auction_at: datetime | None = None
-    auction_raw: str | None = None
-    time_left: str | None = None
-    raw: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -669,6 +671,7 @@ def lot_to_preview(lot: LotData) -> dict[str, Any]:
         "auction_at": lot.auction_at.isoformat() if lot.auction_at else None,
         "auction_raw": lot.auction_raw,
         "time_left": lot.time_left,
+        "source": getattr(lot, "source", "bidcars"),
         "raw": lot.raw or {},
     }
 
@@ -703,6 +706,7 @@ def lot_from_preview(data: dict[str, Any]) -> LotData:
         auction_raw=data.get("auction_raw"),
         time_left=data.get("time_left"),
         raw=raw,
+        source=str(data.get("source") or "bidcars"),
     )
 
 

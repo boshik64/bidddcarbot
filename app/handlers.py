@@ -66,12 +66,15 @@ from app.models import Filter, Payment, SeenLot, User, as_utc, utcnow
 from app.parser import (
     FilterUrlError,
     LotData,
-    extract_bidcars_url,
-    filter_title,
-    label_from_url,
     lot_from_preview,
     lot_to_preview,
+)
+from app.sources import (
+    extract_auction_url,
+    filter_title,
+    label_from_url,
     parse_lot_url,
+    source_label,
     validate_filter_url,
 )
 from app.watch import (
@@ -397,7 +400,8 @@ async def show_filter_list(event: Event) -> None:
     if not filters:
         await _send(
             event,
-            "Фильтров пока нет. Нажми «Добавить» и пришли ссылку на поиск bid.cars.",
+            "Фильтров пока нет. Нажми «Добавить» и пришли ссылку на поиск "
+            "bid.cars / Copart / IAAI.",
             empty_filters_keyboard(),
         )
         return
@@ -468,7 +472,7 @@ async def show_filter_lots(
             message = event.message
             if message is not None:
                 try:
-                    await message.edit_text("Загружаю текущие лоты с bid.cars…")
+                    await message.edit_text("Загружаю текущие лоты…")
                 except TelegramBadRequest:
                     pass
         try:
@@ -712,7 +716,8 @@ async def prompt_add_filter(event: Event, state: FSMContext) -> None:
     await state.set_state(AddFilterStates.waiting_url)
     await _send(
         event,
-        "Пришли ссылку на поиск bid.cars (из адресной строки после фильтра).\n"
+        "Пришли ссылку на поиск bid.cars / Copart / IAAI "
+        "(из адресной строки после фильтра).\n"
         "Ссылку на конкретный лот тоже можно — сразу подпишу на него.",
         add_filter_keyboard(),
         edit=isinstance(event, CallbackQuery),
@@ -725,7 +730,7 @@ async def watch_from_lot_url(message: Message, url: str) -> None:
     parsed = parse_lot_url(url)
     if parsed is None:
         await message.answer(
-            "Не похоже на ссылку лота bid.cars.",
+            "Не похоже на ссылку лота bid.cars / Copart / IAAI.",
             reply_markup=main_reply_keyboard(),
         )
         return
@@ -738,7 +743,9 @@ async def watch_from_lot_url(message: Message, url: str) -> None:
         return
     lot = fetched.lot
     if lot is None:
-        await wait_msg.edit_text("Не нашёл этот лот на bid.cars.")
+        await wait_msg.edit_text(
+            f"Не нашёл этот лот на {source_label(parsed.source)}."
+        )
         return
     remember_lot(lot)
     async with SessionLocal() as session:
@@ -1002,16 +1009,22 @@ async def cmd_legacy_manage(message: Message, state: FSMContext) -> None:
 async def got_filter_url(message: Message, state: FSMContext) -> None:
     text = (message.text or "").strip()
     await state.clear()
-    url = extract_bidcars_url(text) or text
+    url = extract_auction_url(text) or text
     if parse_lot_url(url):
         await watch_from_lot_url(message, url)
         return
     await add_filter_from_url(message, url)
 
 
-@router.message(StateFilter(None), F.text.regexp(r"https?://(?:www\.)?bid\.cars/", flags=0))
+@router.message(
+    StateFilter(None),
+    F.text.regexp(
+        r"https?://(?:www\.)?(?:bid\.cars|copart\.com|iaai\.com)/",
+        flags=0,
+    ),
+)
 async def pasted_url(message: Message) -> None:
-    url = extract_bidcars_url(message.text or "") or (message.text or "")
+    url = extract_auction_url(message.text or "") or (message.text or "")
     if parse_lot_url(url):
         await watch_from_lot_url(message, url)
         return
@@ -1258,7 +1271,7 @@ async def cb_watch_actions(callback: CallbackQuery, state: FSMContext) -> None:
     if lot is None:
         await callback.bot.send_message(
             _chat_id(callback),
-            "Не нашёл этот лот на bid.cars, чтобы отслеживать.",
+            "Не нашёл этот лот, чтобы отслеживать.",
         )
         return
     remember_lot(lot)

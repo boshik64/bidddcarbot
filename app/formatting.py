@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from html import escape
 
-from app.parser import LotData, filter_title, format_mileage
+from app.parser import LotData, format_mileage
+from app.sources import filter_title, source_label
 
 
 def lot_caption(lot: LotData) -> str:
-    lines = [f"🚗 <b>{escape(lot.title)}</b>"]
+    source = source_label(getattr(lot, "source", None))
+    lines = [f"🚗 <b>{escape(lot.title)}</b>", f"🏷 {escape(source)}"]
     if lot.current_bid:
         lines.append(f"💰 Текущая ставка: {escape(lot.current_bid)}")
     if lot.buy_now and lot.buy_now != lot.current_bid:
@@ -33,7 +35,7 @@ def lot_caption(lot: LotData) -> str:
 
 
 HELP_TEXT = (
-    "Я слежу за новыми лотами на bid.cars по твоим фильтрам.\n\n"
+    "Я слежу за новыми лотами на <b>bid.cars</b>, <b>Copart</b> и <b>IAAI</b>.\n\n"
     "Доступ по подписке USDT TRC20: 5 USDT / месяц или 50 USDT / год.\n\n"
     "Управление — кнопками внизу экрана и карточками фильтров:\n"
     "📋 <b>Мои фильтры</b> — список, внутри текущие лоты, пауза и удаление\n"
@@ -46,11 +48,11 @@ HELP_TEXT = (
     "Если лот снова выставят — напишу.\n\n"
     "Ссылку на фильтр или на конкретный лот можно просто вставить в чат: "
     "фильтр добавится в список, лот — в отслеживаемые.\n"
-    "Как получить фильтр: bid.cars → настрой поиск → скопируй URL из адресной строки."
+    "Источники: bid.cars / copart.com / iaai.com — поиск или страница лота."
 )
 
 START_TEXT = (
-    "Привет! Я слежу за новыми лотами на bid.cars.\n\n"
+    "Привет! Я слежу за новыми лотами на bid.cars, Copart и IAAI.\n\n"
     "Чтобы пользоваться ботом, нужна подписка:\n"
     "• 1 месяц — <b>5 USDT TRC20</b>\n"
     "• 1 год — <b>50 USDT TRC20</b>\n\n"
