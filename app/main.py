@@ -43,7 +43,8 @@ async def _set_commands(bot: Bot) -> None:
     last_error: Exception | None = None
     for attempt in range(1, 6):
         try:
-            await bot.set_my_commands(commands)
+            await bot.set_my_commands(commands, request_timeout=15)
+            logger.info("Bot commands updated")
             return
         except TelegramNetworkError as exc:
             last_error = exc
@@ -100,7 +101,9 @@ async def main() -> None:
         settings.request_delay_seconds,
     )
 
-    await _set_commands(bot)
+    # Не блокируем polling: на Timeweb set_my_commands часто таймаутится,
+    # и бот «молчит», пока крутятся ретраи.
+    commands_task = asyncio.create_task(_set_commands(bot))
 
     # Первая проверка не сразу при старте — даём боту подняться.
     async def _kickoff() -> None:
@@ -114,6 +117,7 @@ async def main() -> None:
         logger.info("Bot polling started")
         await dp.start_polling(bot)
     finally:
+        commands_task.cancel()
         kickoff.cancel()
         scheduler.shutdown(wait=False)
         await client.close()
